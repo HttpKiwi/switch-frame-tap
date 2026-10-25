@@ -112,6 +112,7 @@
 #define SFT_FLAG_STATUS   16u   /* v0.7.10: with AUDIO (rate 0, so older viewers drop it): why there is no picture */
 #define SFT_FLAG_CROP     32u   /* v0.7.16: with H264 - block_h_log2 is the part of the picture the game drew (w << 16 | h) */
 #define SFT_FLAG_CROP_MID 64u   /* v0.7.16: with CROP - that part is in the middle of the picture, not at its top left */
+#define SFT_FLAG_INPUT   128u   /* v0.7.20: this console takes our controller (on every header but plain audio) */
 
 #pragma pack(push, 1)
 typedef struct {
@@ -161,6 +162,10 @@ static int g_always_on_top = 0;
  * v0.7.18 lock, SFTL) so the MP4 stays one file - it then scales pictures of
  * another size. Off: never scaled; a new file starts when the size changes. */
 static int g_rec_one_file = 0;
+/* v0.7.20: a controller on this computer plays the Switch (pad.h); sent only
+ * to a console that asks for it (config viewer_input, header flag 128) */
+static int g_pad_send = 1;
+static int g_pad_kbd = 0;                  /* ...and the keyboard (off by default: it takes the letter keys) */
 static int g_drag_pending = 0, g_dragging = 0;
 static int g_drag_ox, g_drag_oy, g_drag_wx, g_drag_wy;
 static int g_drag_sx, g_drag_sy; /* global mouse at button-down (absolute threshold) */
@@ -642,6 +647,8 @@ static void prefs_load(void)
         if (sscanf(line, "chromeless=%d", &hm) == 1) g_chromeless = hm != 0;
         if (sscanf(line, "always_on_top=%d", &hm) == 1) g_always_on_top = hm != 0;
         if (sscanf(line, "one_file_recording=%d", &hm) == 1) g_rec_one_file = hm != 0;
+        if (sscanf(line, "controller_to_switch=%d", &hm) == 1) g_pad_send = hm != 0;
+        if (sscanf(line, "keyboard_to_switch=%d", &hm) == 1) g_pad_kbd = hm != 0;
         if (sscanf(line, "picture=%127s", v) == 1) pic_parse(v);
         if (sscanf(line, "window=%d,%d,%d,%d", &g_geom_x, &g_geom_y, &g_geom_w, &g_geom_h) == 4 &&
             g_geom_w >= 160 && g_geom_h >= 90) g_geom_valid = 1;
@@ -721,6 +728,7 @@ static void prefs_save(void)
             g_pic.bright, g_pic.contrast, g_pic.sat, g_pic.gamma10, g_pic.sharp);
     fprintf(f, "fsr_sharpness=%d\n", g_fsr_sharpness);
     fprintf(f, "one_file_recording=%d\n", g_rec_one_file);
+    fprintf(f, "controller_to_switch=%d\nkeyboard_to_switch=%d\n", g_pad_send, g_pad_kbd);
     fprintf(f, "update_betas=%d\nupdate_check=%d\n", g_upd_betas, g_upd_check);
     if (g_geom_valid)
         fprintf(f, "window=%d,%d,%d,%d\nmaximized=%d\n", g_geom_x, g_geom_y, g_geom_w, g_geom_h, g_geom_maximized);
@@ -1128,6 +1136,12 @@ static int status_for_menu(char *head, size_t hn, char *detail, size_t dn, uint3
  * owns the connection; consoles before v0.7.13 ignore it. */
 static SDL_atomic_t g_want_key;
 static void key_request(void) { SDL_AtomicSet(&g_want_key, 1); }
+/* v0.7.20: one writer at a time on the connection - the reader's requests and
+ * the controller's sender thread (pad.h) */
+static SDL_mutex *g_tx_m = NULL;
+static SDL_atomic_t g_console_takes_pad;
+static void pad_start(void);
+static void pad_stop(void);
 static void key_send_pending(void)
 {
     /* v0.7.18: a retry (below) waits 150 ms - while streaming, the console has
@@ -1150,6 +1164,7 @@ static void key_send_pending(void)
     static const unsigned char msg_nocrop[12] = { 'S', 'F', 'T', 'K', 'S', 'F', 'T', 'D', 'S', 'F', 'T', 'L' };
     static const unsigned char msg_nocrop_free[12] = { 'S', 'F', 'T', 'K', 'S', 'F', 'T', 'D', 'S', 'F', 'T', 'U' };
     const unsigned char *msg = rec_active() ? (g_rec_one_file ? msg_nocrop : msg_nocrop_free) : msg_crop;
+    SDL_LockMutex(g_tx_m);
     if (g_sock != SOCK_BAD) { send(g_sock, (const char *)msg, sizeof(msg_crop), 0); }
     else if (g_usb) {
         /* v0.7.18: the console takes a request only while a buffer of its own
@@ -1162,6 +1177,7 @@ static void key_send_pending(void)
         if (rc == LIBUSB_ERROR_TIMEOUT && n == 0 && ++tries < 14) { SDL_AtomicSet(&g_want_key, 1); s_retry_at = SDL_GetTicks64() + 150; }
         else { tries = 0; s_retry_at = 0; }
     }
+    SDL_UnlockMutex(g_tx_m);
 }
 
 static int reader_main(void *arg)
@@ -1199,6 +1215,9 @@ static int reader_main(void *arg)
         g_net_got_stream = 1;
         const Uint64 t = SDL_GetPerformanceCounter();
         if (hdr.magic != SFT_MAGIC) { fprintf(stderr, "bad magic 0x%08x, resyncing\n", hdr.magic); continue; }
+        /* v0.7.20: pictures, hellos and status say whether to send the controller */
+        if (!(hdr.flags & SFT_FLAG_AUDIO) || (hdr.flags & SFT_FLAG_STATUS))
+            SDL_AtomicSet(&g_console_takes_pad, (hdr.flags & SFT_FLAG_INPUT) != 0);
         if (hdr.length == 0 || hdr.length > 64u*1024*1024) continue;
         if (hdr.flags & SFT_FLAG_AUDIO) {
             static uint8_t abuf[64 * 1024];
@@ -1239,15 +1258,19 @@ static int reader_main(void *arg)
 static void reader_start(void)
 {
     if (!g_qm) { g_qm = SDL_CreateMutex(); g_q_put = SDL_CreateCond(); g_q_get = SDL_CreateCond(); }
+    if (!g_tx_m) g_tx_m = SDL_CreateMutex();
     g_qh = g_qn = 0;
     g_rd_stop = 0;
+    SDL_AtomicSet(&g_console_takes_pad, 0);
     key_request();                     /* v0.7.13: tells the console this viewer can ask */
     g_rd = SDL_CreateThread(reader_main, "usb-reader", NULL);
+    pad_start();                       /* v0.7.20 */
 }
 
 static void reader_stop(void)
 {
     if (!g_rd) return;
+    pad_stop();                        /* v0.7.20: before the connection closes */
     g_rd_stop = 1;
     SDL_LockMutex(g_qm); SDL_CondSignal(g_q_put); SDL_UnlockMutex(g_qm);
     SDL_WaitThread(g_rd, NULL);
@@ -1708,6 +1731,7 @@ static void act_hwdec(int on)
     hud_toast(on ? "Hardware decoding on" : "Hardware decoding off - decoding on the CPU");
 }
 
+#include "pad.h"               /* v0.7.20: a controller here plays the Switch */
 #include "ui.h"                /* v0.7.12: the home screen and the settings drawer */
 
 static void viewer_repaint(void)
@@ -1754,6 +1778,7 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
     }
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
+        pad_event(&e);                     /* v0.7.20: controllers come and go */
         if (e.type == SDL_QUIT) {
             window_geom_capture(win);
             prefs_save();
@@ -1856,8 +1881,10 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
             if (g_menu) menu_draw(ren);
             continue;
         }
-        /* the shortcuts (the drawer has all of them too) */
-        const SDL_Keycode key = e.type == SDL_KEYDOWN && !e.key.repeat ? e.key.keysym.sym : SDLK_UNKNOWN;
+        /* the shortcuts (the drawer has all of them too) - v0.7.20: while the
+         * keyboard plays the Switch, only F11, F3 and Esc (Settings) */
+        SDL_Keycode key = e.type == SDL_KEYDOWN && !e.key.repeat ? e.key.keysym.sym : SDLK_UNKNOWN;
+        if (key != SDLK_F11 && key != SDLK_F3 && pad_keyboard_playing(win, !g_ui_open && !g_ip_editing)) key = SDLK_UNKNOWN;
         if (key == SDLK_TAB) { act_conn(g_conn != CONN_NET); if (g_menu) menu_draw(ren); }
         else if (key == SDLK_i && act_ip_possible()) { act_ip(); menu_draw(ren); }
         else if (key == SDLK_F11 || key == SDLK_f ||
@@ -2184,6 +2211,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
     fprintf(stderr, "decode: %s\n", dec.hwname ? g_dec_name : low_latency ? "one thread, no decoder delay" : "frame threads (--threads)");
     if (!win) {
         if (video_init() != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
+        pad_init();                        /* v0.7.20 */
         SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_BT709);
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
         win = SDL_CreateWindow("Switch Frame Tap", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -2237,6 +2265,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
     while (!g_quit) {
         beat();
         app_events(win, ren, tex);
+        pad_poll(win, !g_ui_open && !g_ip_editing);   /* v0.7.20: the controller, when it changed */
         if (g_ren_swap) {                      /* v0.7.11: the upscaler wants the other renderer */
             ren_swap(&win, &ren, &tex);
             W = H = 0;
@@ -2628,6 +2657,7 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--mp4") && i + 1 < argc) g_mp4 = argv[++i];
         else if (!strcmp(argv[i], "--rec-dir") && i + 1 < argc) g_rec_dir = argv[++i];
         else if (!strcmp(argv[i], "--net") && i + 1 < argc) net_host = argv[++i];
+        else if (!strcmp(argv[i], "--pad-test")) { g_pad_test = 1; g_pad_kbd = 1; }   /* v0.7.20: tests */
         else if (!strcmp(argv[i], "--no-aspect-lock")) g_lock_aspect_cli = 0;
         else if (!strcmp(argv[i], "--aspect-lock")) g_lock_aspect_cli = 1;
         else if (!strcmp(argv[i], "--chromeless")) g_chromeless_cli = 1;
@@ -2681,6 +2711,7 @@ int main(int argc, char **argv)
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Switch Frame Tap", SDL_GetError(), NULL);
             return 1;
         }
+        pad_init();                        /* v0.7.20 */
         SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_BT709);
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
         prefs_load();                      /* v0.7: USB or network, the last address; v0.7.11: before the renderer */

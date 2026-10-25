@@ -198,6 +198,10 @@ int main() {
     /* v0.7.18: homebrew told the console is docked */
     ExpectRelease("homebrew_docked = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio hbdocked");
     ExpectRelease("homebrew_docked = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    /* v0.7.20: the viewer's controller */
+    ExpectRelease("viewer_input = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio vinput");
+    ExpectRelease("viewer_input = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    ExpectRelease("homebrew_docked = 1\nviewer_input = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio hbdocked vinput");
     ExpectContains("vic live nodethome wait=20\n", "nodethome", true);
     ExpectContains("vic live wait=20\n", "nodethome", false);
 

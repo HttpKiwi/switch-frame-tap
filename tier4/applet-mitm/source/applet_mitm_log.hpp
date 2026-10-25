@@ -85,10 +85,16 @@ namespace ams::mitm::applet {
     bool UsbWaitAsync(u32 urb, size_t *out_sent);
     /* v0.7.12: the viewer says goodbye ("SFTQ" on the OUT endpoint) when it
      * closes, so a stream ends at once instead of after the 5 s timeout.
-     * Called from the stream loop; UsbByeStop at the end of a session. */
+     * Called from the stream loop; UsbByeStop at the start and end of a
+     * session forgets one from outside it.
+     * v0.7.20: a thread of its own reads the OUT endpoint (StartUsbOutReader);
+     * UsbOutPark before usb:ds goes, UsbOutUnpark once it is back. */
     bool UsbViewerSaidBye();
     void SetScreenOffNow(bool on);   /* v0.7.12: sftap 4 */
     void UsbByeStop();
+    void StartUsbOutReader();
+    void UsbOutPark();
+    void UsbOutUnpark();
 
     /* M86: true if a host program is reading the stream endpoint right now.
      * Sends one empty SFTR header (length 0, which raw-view skips) and waits

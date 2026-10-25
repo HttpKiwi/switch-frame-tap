@@ -32,6 +32,7 @@
         "mm:u",
         "clkrst",
         "hid",
+        "hid:dbg",
         "time:u",
         "grc:d",
         "bsd:u",

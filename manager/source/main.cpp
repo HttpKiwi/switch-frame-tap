@@ -226,6 +226,7 @@ namespace {
         bool home_menu = false;   /* v0.7.14: stream the HOME menu and system applets too (beta); from the next boot */
         bool overlays = false;    /* v0.7.14: the system overlays in the stream (beta); from the next boot */
         bool hb_docked = false;   /* v0.7.18: homebrew is told the console is docked (1080p); the next app started */
+        bool viewer_input = false;/* v0.7.20: a controller on the viewer's PC plays the console; right away */
         bool update_betas = false;/* v0.7.14: "Check for updates" offers pre-releases too (this app's own key) */
         int conn = 0;           /* v0.7: connection - 0 USB (PC viewer), 1 USB webcam, 2 (v0.7.7) USB webcam NV12, 3 network; from the next boot */
     };
@@ -277,6 +278,7 @@ namespace {
         if (IniGet(ini, "home_menu", &v)) { s.home_menu = v == "1"; }
         if (IniGet(ini, "overlays", &v)) { s.overlays = v == "1"; }
         if (IniGet(ini, "homebrew_docked", &v)) { s.hb_docked = v == "1"; }
+        if (IniGet(ini, "viewer_input", &v)) { s.viewer_input = v == "1"; }
         if (IniGet(ini, "update_betas", &v)) { s.update_betas = v == "1"; }
         /* the v0.4-v0.7 keys first, then the one that replaced them */
         if (IniGet(ini, "usb_mode", &v) && v == "webcam") { s.conn = 1; }
@@ -334,11 +336,13 @@ namespace {
             "# homebrew_docked: 1 = homebrew started from the Homebrew Menu is told the console is docked, so apps that\n"
             "#                  choose their resolution from that draw at 1080p (beta). From the next app started.\n"
             "homebrew_docked = %d\n"
+            "# viewer_input: 1 = a controller on the PC plays the Switch through the PC viewer (an extra Pro Controller, beta)\n"
+            "viewer_input = %d\n"
             "# update_betas: 1 = Check for updates in the app also offers betas (pre-releases)\n"
             "update_betas = %d\n",
             QualityKeys[s.quality], KeyframeFrames[s.keyframe], s.cap720 ? "720" : "1080",
             DelaySeconds[s.delay], s.any_fw ? 1 : 0, s.shot ? 1 : 0, s.shot_combo, custom, s.shot_album ? "album" : "app", s.detach_home ? 1 : 0, s.screen_off ? 1 : 0, s.early.c_str(),
-            s.audio ? 1 : 0, ConnKeys[s.conn], s.home_menu ? 1 : 0, s.overlays ? 1 : 0, s.hb_docked ? 1 : 0, s.update_betas ? 1 : 0);
+            s.audio ? 1 : 0, ConnKeys[s.conn], s.home_menu ? 1 : 0, s.overlays ? 1 : 0, s.hb_docked ? 1 : 0, s.viewer_input ? 1 : 0, s.update_betas ? 1 : 0);
         std::fclose(f);
         return true;
     }
@@ -815,6 +819,14 @@ namespace {
                     "apps that choose their resolution from that - SDL2 ports, emulators - draw at 1080p and stream at "
                     "1080p. The console's screen still shows them. Apps with a fixed 1280x720 picture stay 720p. "
                     "Not for homebrew opened from the Album: there it has too little memory for 1080p."));
+                /* v0.7.20 */
+                p.rows.push_back(Section("Right away"));
+                p.rows.push_back(Toggle("Controller from the PC viewer", [this] { return set.viewer_input; },
+                    [this](int) { set.viewer_input = !set.viewer_input; Saved(); },
+                    "A controller connected to the PC plays the Switch through the PC viewer: it shows up here as one more "
+                    "Pro Controller while the viewer is open, over USB or the network, in games and the HOME menu. "
+                    "If a game only listens to one controller, pick it in Controllers > Change Grip/Order. "
+                    "The viewer needs version 0.7.20 or later."));
                 pages.push_back(std::move(p));
             }
 

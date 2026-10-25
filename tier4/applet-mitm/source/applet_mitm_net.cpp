@@ -6,6 +6,7 @@
 #include "applet_mitm_sm.hpp"
 #include "applet_mitm_log.hpp"
 #include "applet_mitm_nv.hpp"
+#include "applet_mitm_vpad.hpp"
 /* the umbrella <switch.h> wraps libnx in extern "C"; the single headers do not */
 extern "C" {
 #include <switch/services/bsd.h>
@@ -163,7 +164,11 @@ namespace ams::mitm::applet {
             int ls = -1, us = -1;
             u32 last_ip = 0;
             u32 tick = 0;
+            /* v0.7.20: what the viewer sent, a message possibly cut in two */
+            u8 got[96];
+            size_t have = 0;
             for (;; ++tick) {
+                VPadTick();
                 u32 ip = 0, mask = 0, gw = 0, dns1 = 0, dns2 = 0;
                 if (R_FAILED(nifmGetCurrentIpConfigInfo(&ip, &mask, &gw, &dns1, &dns2))) {
                     mask = 0;
@@ -205,29 +210,43 @@ namespace ams::mitm::applet {
                     if (us >= 0) { bsdSetSockOpt(us, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one)); }
                 }
                 if (const int c = g_client.load(); c >= 0) {
-                    /* one viewer at a time. It sends only "SFTK" (v0.7.13: a
-                     * keyframe, please); end of stream means it closed. */
+                    /* one viewer at a time (applet_mitm_viewermsg.hpp); end of
+                     * stream means it closed */
                     pollfd cp = { c, POLLIN, 0 };
                     if (bsdPoll(&cp, 1, 250) > 0 && (cp.revents & (POLLIN | POLLHUP | POLLERR))) {
-                        u8 got[64];
-                        const ssize_t n = bsdRecv(c, got, sizeof(got), 0);
-                        if (n <= 0) { NetDropClient("the viewer closed the connection"); }
-                        for (ssize_t k = 0; k + 4 <= n; ++k) {
-                            if (std::memcmp(got + k, "SFTK", 4) == 0) {
-                                g_viewer_can_ask.store(true, std::memory_order_relaxed);
-                                g_viewer_key_request.store(true, std::memory_order_relaxed);
+                        const ssize_t n = bsdRecv(c, got + have, sizeof(got) - have, 0);
+                        if (n <= 0) { NetDropClient("the viewer closed the connection"); have = 0; continue; }
+                        have += static_cast<size_t>(n);
+                        namespace vm = sft::viewermsg;
+                        size_t k = 0;
+                        while (k < have) {
+                            const vm::Msg m = vm::Next(got + k, have - k);
+                            if (m.kind == vm::Kind::Partial) { break; }
+                            switch (m.kind) {
+                                /* v0.7.13: a keyframe, please - and this viewer can ask */
+                                case vm::Kind::Key:
+                                    g_viewer_can_ask.store(true, std::memory_order_relaxed);
+                                    g_viewer_key_request.store(true, std::memory_order_relaxed);
+                                    break;
+                                /* v0.7.16: "SFTC" - it draws crops itself (header flags 32/64) */
+                                case vm::Kind::Crop:   g_viewer_crop.store(true, std::memory_order_relaxed); break;
+                                /* v0.7.17: "SFTD" - it records: the pictures cropped here, not in the viewer */
+                                case vm::Kind::NoCrop: g_viewer_crop.store(false, std::memory_order_relaxed); break;
+                                /* v0.7.18: "SFTL" / "SFTU" - one stream size while it records (#44) */
+                                case vm::Kind::Lock:   ViewerLockSize(true); break;
+                                case vm::Kind::Unlock: ViewerLockSize(false); break;
+                                /* v0.7.20: its controller */
+                                case vm::Kind::Pad:    VPadFromViewer(vm::ReadPad(got + k)); break;
+                                default: break;
                             }
-                            /* v0.7.16: "SFTC" - it draws crops itself (header flags 32/64) */
-                            if (std::memcmp(got + k, "SFTC", 4) == 0) { g_viewer_crop.store(true, std::memory_order_relaxed); }
-                            /* v0.7.17: "SFTD" - it records: the pictures cropped here, not in the viewer */
-                            if (std::memcmp(got + k, "SFTD", 4) == 0) { g_viewer_crop.store(false, std::memory_order_relaxed); }
-                            /* v0.7.18: "SFTL" / "SFTU" - one stream size while it records (#44) */
-                            if (std::memcmp(got + k, "SFTL", 4) == 0) { ViewerLockSize(true); }
-                            if (std::memcmp(got + k, "SFTU", 4) == 0) { ViewerLockSize(false); }
+                            k += m.len;
                         }
+                        std::memmove(got, got + k, have - k);
+                        have -= k;
                     }
                     continue;
                 }
+                have = 0;
                 if (us >= 0 && tick % 4 == 0) { Beacon(us, ip, mask); }
                 pollfd pf = { ls, POLLIN, 0 };
                 const int pr = bsdPoll(&pf, 1, 250);
@@ -325,6 +344,7 @@ namespace ams::mitm::applet {
         if (s >= 0) {
             bsdClose(s);
             LogLine("net: viewer disconnected (%s)", why);
+            VPadRelease("the network viewer left");   /* v0.7.20 */
         }
     }
 

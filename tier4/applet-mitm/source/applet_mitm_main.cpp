@@ -35,6 +35,7 @@
 #include "applet_mitm_ovlprobe.hpp"
 #include "applet_mitm_overlay.hpp"
 #include "applet_mitm_featmem.hpp"
+#include "applet_mitm_vpad.hpp"
 
 /* Force libnx's nv layer to use "nvdrv:s" instead of picking a service via
  * appletGetAppletType() - that call is meaningless here and is what made a
@@ -692,6 +693,8 @@ namespace ams {
             g_screen_off.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "screenoff"), std::memory_order_relaxed);
             /* v0.7.18: homebrew told the console is docked - the next one started */
             mitm::applet::g_hb_docked.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "hbdocked"), std::memory_order_relaxed);
+            /* v0.7.20: the viewer's controller - at once (off lets it go at the next tick) */
+            mitm::applet::g_vpad_enabled.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "vinput"), std::memory_order_relaxed);
             mitm::applet::g_early_collect = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "earlyoff") ? 0
                                           : mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "earlyab") ? 2 : 1;
         }
@@ -1296,6 +1299,7 @@ namespace ams {
         mitm::applet::StartAudio();
         mitm::applet::SoundProbeStart();   /* v0.7.14 research: off without probe-sound.txt */
         mitm::applet::OvlProbeStart();     /* v0.7.14 research: off without probe-ovl.txt */
+        mitm::applet::StartUsbOutReader();   /* v0.7.20: the viewer's messages over USB (not with net or webcam) */
         mitm::applet::StartNet();         /* v0.7: only with "net"; waits for the console to be online */       /* idle, and grc:d untouched, until audio is on */
         mitm::applet::StartVicWorker();
         mitm::applet::StartAppletWatch();   /* v0.7.10: an applet starting while we stream */
@@ -1329,6 +1333,8 @@ namespace ams {
         /* v0.7.18: before am's mitm: it decides which apps to wrap */
         mitm::applet::g_hb_docked.store(ArmFileContains("hbdocked"), std::memory_order_relaxed);
         if (mitm::applet::g_hb_docked.load()) { mitm::applet::LogLine("am: homebrew from the Homebrew Menu is told the console is docked (homebrew_docked)"); }
+        mitm::applet::g_vpad_enabled.store(ArmFileContains("vinput"), std::memory_order_relaxed);
+        if (mitm::applet::g_vpad_enabled.load()) { mitm::applet::LogLine("vpad: a controller on the viewer's computer may play the console (viewer_input)"); }
         if (ArmFileContains("noam")) { mitm::applet::LogLine("am: not wrapped (noam)"); } else { mitm::applet::StartAmMitm(); }
         /* v0.7.17: a game's audout:u - its own PCM for the stream when nothing else carries its sound (PokeMMO) */
         if (ArmFileContains("noaudout")) { mitm::applet::LogLine("audout: not wrapped (noaudout)"); } else { mitm::applet::StartAudOutMitm(); }
@@ -1454,7 +1460,7 @@ namespace ams::mitm::applet {
             if (reason >= sizeof(text) / sizeof(text[0])) { return; }
             alignas(0x1000) static u8 hdr_buf[0x1000];
             alignas(0x1000) static u8 body_buf[0x1000];
-            const u32 h[8] = { 0x52544653u, 2u | ((8u | 16u) << 16), 0, 0, 0, static_cast<u32>(sizeof(Status)), 0, 0 };
+            const u32 h[8] = { 0x52544653u, 2u | ((8u | 16u | VPadHdrFlag()) << 16), 0, 0, 0, static_cast<u32>(sizeof(Status)), 0, 0 };
             std::memcpy(hdr_buf, h, sizeof(h));
             Status st = {};
             st.version = 1;
@@ -1490,7 +1496,7 @@ namespace ams::mitm::applet {
         const bool on = g_stream_enabled.load(std::memory_order_relaxed);
         if (!on && !g_usb_released && ::ams::g_usb_ep_in != nullptr) {
             static_cast<void>(usbDsEndpoint_Cancel(::ams::g_usb_ep_in));
-            UsbByeStop();
+            UsbOutPark();   /* v0.7.20: the OUT reader's buffer back first */
             if (::ams::g_usb_ep_out != nullptr) { static_cast<void>(usbDsEndpoint_Cancel(::ams::g_usb_ep_out)); }
             usbDsExit();
             ::ams::g_usb_iface = nullptr;
@@ -1503,6 +1509,7 @@ namespace ams::mitm::applet {
             LogLine("usb: streaming switched on - taking the USB port again");
             SmUse sm_usb;
             ::ams::TryUsbEnumerate();
+            UsbOutUnpark();
         }
     }
 
@@ -1520,8 +1527,8 @@ namespace ams::mitm::applet {
                 if (const u32 r = g_viewer_reason.load(std::memory_order_relaxed); r != ViewerReason_None) { UsbSendStatus(r, true); }
                 else {
                     /* nothing to say: an empty header, which every viewer skips */
-                    static constexpr u32 Hello[8] = { 0x52544653u, 2u, 0, 0, 0, 0, 0, 0 };
-                    static_cast<void>(NetSendBuffer(Hello, sizeof(Hello)));
+                    const u32 hello[8] = { 0x52544653u, 2u | (static_cast<u32>(VPadHdrFlag()) << 16), 0, 0, 0, 0, 0, 0 };
+                    static_cast<void>(NetSendBuffer(hello, sizeof(hello)));
                 }
             }
             return true;
@@ -1537,7 +1544,7 @@ namespace ams::mitm::applet {
             return !UvcHostStalled() || UvcHostReading(timeout_ms);
         }
         alignas(0x1000) static u8 hello[0x1000];
-        const u32 h[8] = { 0x52544653u, 2u, 0, 0, 0, 0, 0, 0 };   /* "SFTR", v2, all else 0: length 0 */
+        const u32 h[8] = { 0x52544653u, 2u | (static_cast<u32>(VPadHdrFlag()) << 16), 0, 0, 0, 0, 0, 0 };   /* "SFTR", v2, all else 0: length 0 (v0.7.20: flag 128 - send the controller) */
         std::memcpy(hello, h, sizeof(h));
         u32 urb = 0;
         if (R_FAILED(usbDsEndpoint_PostBufferAsync(::ams::g_usb_ep_in, hello, sizeof(h), std::addressof(urb)))) { return false; }
@@ -1638,48 +1645,132 @@ namespace ams::mitm::applet {
 
     void SetScreenOffNow(bool on) { ::ams::g_screen_off.store(on, std::memory_order_relaxed); }
 
-    namespace { bool g_bye_posted = false; u32 g_bye_urb = 0; }
+    /* v0.7.20: the viewer's messages over USB are read by a thread of their
+     * own. A buffer now always waits on the OUT endpoint, so a controller's
+     * state arrives as it is sent - the stream loop looked every 8 frames,
+     * and only while a stream ran (the reason the viewer retried its first
+     * request for up to 2 s, #45). The stream loop's UsbViewerSaidBye only
+     * reads what this thread saw. The endpoint is this thread's alone; before
+     * usb:ds goes (streaming switched off) UsbOutPark waits until it holds
+     * nothing posted. */
+    namespace {
+        constinit std::atomic<bool> g_out_bye{false};
+        constinit std::atomic<bool> g_out_park{false};
+        constinit std::atomic<bool> g_out_parked{true};
+        constinit bool g_out_started = false;
+        alignas(os::ThreadStackAlignment) constinit u8 g_out_stack[8_KB];
+        constinit os::ThreadType g_out_thread;
+
+        void UsbOutHandle(const u8 *p, u32 got) {
+            namespace vm = sft::viewermsg;
+            for (u32 k = 0; k < got; ) {
+                const vm::Msg m = vm::Next(p + k, got - k);
+                if (m.kind == vm::Kind::Partial) { break; }
+                switch (m.kind) {
+                    /* v0.7.13: "SFTK" - the viewer wants a keyframe (a new decoder, a recording) */
+                    case vm::Kind::Key:    g_viewer_key_request.store(true, std::memory_order_relaxed); break;
+                    /* v0.7.16: "SFTC" - this viewer draws crops itself */
+                    case vm::Kind::Crop:   g_viewer_crop.store(true, std::memory_order_relaxed); break;
+                    /* v0.7.17: "SFTD" - it records: the pictures cropped here, not in the viewer */
+                    case vm::Kind::NoCrop: g_viewer_crop.store(false, std::memory_order_relaxed); break;
+                    /* v0.7.18: "SFTL" / "SFTU" - it records: one stream size until it stops (#44) */
+                    case vm::Kind::Lock:   ViewerLockSize(true); break;
+                    case vm::Kind::Unlock: ViewerLockSize(false); break;
+                    case vm::Kind::Bye:
+                        g_viewer_crop.store(false, std::memory_order_relaxed);
+                        ViewerLockSize(false);
+                        VPadRelease("the viewer closed");
+                        g_out_bye.store(true);
+                        break;
+                    case vm::Kind::Pad:    VPadFromViewer(vm::ReadPad(p + k)); break;
+                    default: break;
+                }
+                k += static_cast<u32>(m.len);
+            }
+        }
+
+        void UsbOutThread(void *) {
+            UsbDsEndpoint *ep = nullptr;     /* the endpoint our buffer is posted on */
+            u32 urb = 0, fails = 0, idle = 0;
+            for (;;) {
+                VPadTick();
+                /* usbDsGetState only while nothing is posted, and once a
+                 * second of silence: a pulled cable leaves the buffer waiting */
+                const bool ready = !g_out_park.load() && ::ams::g_usb_ep_out != nullptr &&
+                                   ((ep != nullptr && idle < 10) || UsbReady());
+                if (!ready) {
+                    if (ep != nullptr) {
+                        static_cast<void>(usbDsEndpoint_Cancel(ep));
+                        static_cast<void>(eventWait(std::addressof(ep->CompletionEvent), UINT64_C(100000000)));
+                        eventClear(std::addressof(ep->CompletionEvent));
+                        ep = nullptr;
+                    }
+                    g_out_parked.store(true);
+                    os::SleepThread(TimeSpan::FromMilliSeconds(250));   /* no cable: a usbDsGetState 4 times a second */
+                    continue;
+                }
+                if (idle >= 10) { idle = 0; }
+                g_out_parked.store(false);
+                if (g_out_park.load()) { continue; }   /* parked between the two: give it up first */
+                if (ep == nullptr) {
+                    UsbDsEndpoint *const e = ::ams::g_usb_ep_out;
+                    eventClear(std::addressof(e->CompletionEvent));
+                    std::memset(::ams::g_usb_ep_out_buf, 0, 64);
+                    if (R_FAILED(usbDsEndpoint_PostBufferAsync(e, ::ams::g_usb_ep_out_buf, sizeof(::ams::g_usb_ep_out_buf), std::addressof(urb)))) {
+                        if (++fails == 1) { LogLine("usb: the viewer's messages can't be read (OUT post failed) - trying again"); }
+                        os::SleepThread(TimeSpan::FromMilliSeconds(500));
+                        continue;
+                    }
+                    ep = e;
+                    idle = 0;
+                }
+                if (R_FAILED(eventWait(std::addressof(ep->CompletionEvent), UINT64_C(100000000)))) { ++idle; continue; }   /* nothing yet */
+                eventClear(std::addressof(ep->CompletionEvent));
+                UsbDsEndpoint *const done = ep;
+                ep = nullptr;
+                UsbDsReportData report = {};
+                u32 got = 0;
+                if (R_FAILED(usbDsEndpoint_GetReportData(done, std::addressof(report))) ||
+                    R_FAILED(usbDsParseReportData(std::addressof(report), urb, nullptr, std::addressof(got)))) {
+                    os::SleepThread(TimeSpan::FromMilliSeconds(10));   /* a cancelled or failed transfer */
+                    continue;
+                }
+                fails = 0;
+                UsbOutHandle(::ams::g_usb_ep_out_buf, std::min<u32>(got, sizeof(::ams::g_usb_ep_out_buf)));
+            }
+        }
+    }
+
+    void StartUsbOutReader() {
+        if (!::ams::g_usb_armed || g_uvc_mode || g_out_started) { return; }
+        if (R_FAILED(os::CreateThread(std::addressof(g_out_thread), UsbOutThread, nullptr, g_out_stack, sizeof(g_out_stack),
+                                      os::GetThreadPriority(os::GetCurrentThread())))) {
+            LogLine("usb: no thread for the viewer's messages - goodbyes and requests are not read this boot");
+            return;
+        }
+        os::SetThreadNamePointer(std::addressof(g_out_thread), "applet-mitm.UsbOut");
+        os::StartThread(std::addressof(g_out_thread));
+        NoteThread(std::addressof(g_out_thread));
+        g_out_started = true;
+    }
+
+    /* before usb:ds goes: our buffer taken back (the thread cancels it) */
+    void UsbOutPark() {
+        g_out_park.store(true);
+        if (!g_out_started) { return; }
+        for (int i = 0; i < 50 && !g_out_parked.load(); ++i) { os::SleepThread(TimeSpan::FromMilliSeconds(10)); }
+        if (!g_out_parked.load()) { LogLine("usb: the OUT reader did not give its buffer back in 500 ms"); }
+    }
+
+    void UsbOutUnpark() { g_out_park.store(false); }
 
     bool UsbViewerSaidBye() {
-        if (g_tx_net.load(std::memory_order_relaxed) || g_uvc_mode || ::ams::g_usb_ep_out == nullptr) { return false; }
-        UsbDsEndpoint *ep = ::ams::g_usb_ep_out;
-        if (!g_bye_posted) {
-            eventClear(std::addressof(ep->CompletionEvent));
-            std::memset(::ams::g_usb_ep_out_buf, 0, 16);
-            if (R_FAILED(usbDsEndpoint_PostBufferAsync(ep, ::ams::g_usb_ep_out_buf, sizeof(::ams::g_usb_ep_out_buf), std::addressof(g_bye_urb)))) { return false; }
-            g_bye_posted = true;
-            return false;
-        }
-        if (R_FAILED(eventWait(std::addressof(ep->CompletionEvent), 0))) { return false; }   /* nothing yet */
-        eventClear(std::addressof(ep->CompletionEvent));
-        g_bye_posted = false;
-        UsbDsReportData report = {};
-        u32 got = 0;
-        if (R_FAILED(usbDsEndpoint_GetReportData(ep, std::addressof(report))) ||
-            R_FAILED(usbDsParseReportData(std::addressof(report), g_bye_urb, nullptr, std::addressof(got)))) { return false; }
-        /* v0.7.16: "SFTC" after the SFTK - this viewer draws crops itself */
-        for (u32 k = 0; k + 4 <= got && k + 4 <= sizeof(::ams::g_usb_ep_out_buf); k += 4) {
-            if (std::memcmp(::ams::g_usb_ep_out_buf + k, "SFTC", 4) == 0) { g_viewer_crop.store(true, std::memory_order_relaxed); }
-            /* v0.7.17: "SFTD" - it records: the pictures cropped here, not in the viewer */
-            if (std::memcmp(::ams::g_usb_ep_out_buf + k, "SFTD", 4) == 0) { g_viewer_crop.store(false, std::memory_order_relaxed); }
-            /* v0.7.18: "SFTL" / "SFTU" - it records: one stream size until it stops (#44) */
-            if (std::memcmp(::ams::g_usb_ep_out_buf + k, "SFTL", 4) == 0) { ViewerLockSize(true); }
-            if (std::memcmp(::ams::g_usb_ep_out_buf + k, "SFTU", 4) == 0) { ViewerLockSize(false); }
-        }
-        /* v0.7.13: "SFTK" - the viewer wants a keyframe (a new decoder, a recording) */
-        if (got >= 4 && std::memcmp(::ams::g_usb_ep_out_buf, "SFTK", 4) == 0) { g_viewer_key_request.store(true, std::memory_order_relaxed); return false; }
-        const bool bye = got >= 4 && std::memcmp(::ams::g_usb_ep_out_buf, "SFTQ", 4) == 0;
-        if (bye) { g_viewer_crop.store(false, std::memory_order_relaxed); ViewerLockSize(false); }
-        return bye;
+        if (g_tx_net.load(std::memory_order_relaxed) || g_uvc_mode) { return false; }
+        return g_out_bye.exchange(false);
     }
 
-    void UsbByeStop() {
-        if (!g_bye_posted || ::ams::g_usb_ep_out == nullptr) { g_bye_posted = false; return; }
-        static_cast<void>(usbDsEndpoint_Cancel(::ams::g_usb_ep_out));
-        static_cast<void>(eventWait(std::addressof(::ams::g_usb_ep_out->CompletionEvent), UINT64_C(100000000)));
-        eventClear(std::addressof(::ams::g_usb_ep_out->CompletionEvent));
-        g_bye_posted = false;
-    }
+    /* a goodbye from before this session (or after the last) means nothing now */
+    void UsbByeStop() { g_out_bye.store(false); }
 
     bool UsbSendBuffer(const void *buf, size_t len, size_t *out_sent) {
         if (out_sent != nullptr) { *out_sent = 0; }

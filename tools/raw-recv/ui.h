@@ -50,7 +50,7 @@ static void ui_open(int open);
 
 enum { H_NONE, H_SETTINGS, H_CLOSE, H_BACKDROP, H_CONN, H_IP, H_FULL, H_VSYNC, H_ASPECT, H_CHROMELESS, H_UPS, H_HUD, H_HWDEC,
        H_PIC, H_PIC_RESET, H_SOUND, H_REC, H_PANEL, H_FSR_SHARP, H_SUPPORT, H_SCROLL,
-       H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE, H_UPD, H_UPD_BETA, H_UPD_AUTO, H_PIN, H_REC1 };
+       H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE, H_UPD, H_UPD_BETA, H_UPD_AUTO, H_PIN, H_REC1, H_PAD, H_PADKB };
 
 typedef struct { SDL_FRect r; int id, arg, window_space; } ui_hit_t;
 static ui_hit_t g_ui_hits[96];
@@ -672,6 +672,21 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
             y += h + ui_d(4);
         }
 
+        /* v0.7.20: a controller here plays the Switch (pad.h) */
+        ui_section(ren, cxi, &y, "CONTROLLER");
+        {
+            const float h = ui_d(48);
+            char sub[160];
+            ui_row(H_PAD, 0, y, h);
+            ui_label(ren, cxi, y, h, "Play the Switch with it", pad_status(sub, sizeof(sub)), ui_focused(H_PAD, 0), cwi);
+            ui_toggle(ren, xri, y + ui_d(12), g_pad_send, H_PAD, 1);
+            y += h + ui_d(2);
+            ui_row(H_PADKB, 0, y, h);
+            ui_label(ren, cxi, y, h, "Play the Switch with the keyboard", pad_kbd_status(sub, sizeof(sub)), ui_focused(H_PADKB, 0), cwi);
+            ui_toggle(ren, xri, y + ui_d(12), g_pad_kbd, H_PADKB, 1);
+            y += h + ui_d(4);
+        }
+
         ui_section(ren, cxi, &y, "RECORDING");
         {
             const float h = ui_d(48);
@@ -1219,6 +1234,8 @@ static void ui_change(SDL_Window *win, SDL_Renderer *ren, int id, int arg, int d
     case H_CHROMELESS: act_chromeless(win, !g_chromeless); break;
     case H_HWDEC: act_hwdec(!g_hwdec); break;
     case H_REC1: act_rec_one_file(!g_rec_one_file); break;
+    case H_PAD: act_pad_send(!g_pad_send); break;
+    case H_PADKB: act_pad_kbd(!g_pad_kbd); break;
     case H_UPS: act_upscaler(ren, d < 0 ? (g_upscaler + UP_COUNT - 1) % UP_COUNT : (g_upscaler + 1) % UP_COUNT); break;
     case H_HUD: act_hud(d < 0 ? (g_hud + HUD_MODES - 1) % HUD_MODES : (g_hud + 1) % HUD_MODES); break;
     case H_FSR_SHARP:
@@ -1327,6 +1344,8 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
             case H_VSYNC: act_vsync(ren, h->arg); break;
             case H_ASPECT: act_lock_aspect(win, h->arg); break;
             case H_REC1: act_rec_one_file(!g_rec_one_file); break;
+            case H_PAD: act_pad_send(!g_pad_send); break;
+            case H_PADKB: act_pad_kbd(!g_pad_kbd); break;
             case H_CHROMELESS: act_chromeless(win, h->arg); break;
             case H_HWDEC: act_hwdec(h->arg); break;
             case H_UPS: act_upscaler(ren, h->arg); break;
@@ -1348,7 +1367,7 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
     if (e->type != SDL_KEYDOWN) return 0;
     const SDL_Keycode k = e->key.keysym.sym;
     if (k == SDLK_ESCAPE) { ui_open(!g_ui_open); return 1; }
-    if (k == SDLK_p && !e->key.repeat) {    /* the picture controls */
+    if (k == SDLK_p && !e->key.repeat && !pad_keyboard_playing(win, !g_ui_open && !g_ip_editing)) {    /* the picture controls */
         if (g_ui_open && g_ui_kbd && g_ui_focus < g_ui_nrows && g_ui_rows[g_ui_focus].id == H_PIC) { ui_open(0); return 1; }
         ui_open(1);
         g_ui_kbd = 1;

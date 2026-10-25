@@ -55,6 +55,7 @@
 #include "applet_mitm_idlework.hpp"
 #include "applet_mitm_ovlprobe.hpp"
 #include "applet_mitm_overlay.hpp"
+#include "applet_mitm_vpad.hpp"
 #include <atomic>
 #include <cstring>
 #include <cstdio>
@@ -7952,7 +7953,7 @@ namespace ams::mitm::applet {
             bool pending = false, stalled = false, need_idr = true;
             bool said_long_gop = false;    /* v0.7.13 */
             u32 key_requests = 0;
-            if (live) { g_viewer_key_request.store(false, std::memory_order_relaxed); }   /* it starts with one anyway */
+            if (live) { g_viewer_key_request.store(false, std::memory_order_relaxed); UsbByeStop(); }   /* it starts with one anyway; v0.7.20: an old goodbye means nothing now */
             SizeCheck size_check(s.corner);   /* v0.7.8: the 720p/1080p check, shared with the webcam */
             /* v0.6: the experiment's window (one variant) */
             u64 ab_bytes_p = 0, ab_bytes_i = 0, ab_intra = 0, ab_inter = 0, ab_qp = 0, ab_t0 = armTicksToNs(armGetSystemTick());
@@ -8103,7 +8104,7 @@ namespace ams::mitm::applet {
                 SftHdrWire h = {};
                 h.magic = 0x52544653u;        /* "SFTR" */
                 h.version = 2;
-                h.flags = static_cast<u16>(2 | (f.is_idr ? 4 : 0) | (f.crop != 0 ? 32 : 0) | (f.crop != 0 && f.center ? 64 : 0));   /* bit 1: H.264 AU; bit 2: IDR; bit 5: crop; bit 6: it is centred */
+                h.flags = static_cast<u16>(2 | (f.is_idr ? 4 : 0) | (f.crop != 0 ? 32 : 0) | (f.crop != 0 && f.center ? 64 : 0) | VPadHdrFlag());   /* bit 1: H.264 AU; bit 2: IDR; bit 5: crop; bit 6: it is centred; v0.7.20 bit 7: send the controller */
                 h.width = L.w; h.height = L.h;
                 h.stride = static_cast<u32>(age / 1000);               /* M85: console-side age, us */
                 h.length = payload;

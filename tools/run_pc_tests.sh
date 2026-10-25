@@ -28,6 +28,8 @@ run "arm-file parser (whole tokens, numbers)" \
     bash -c "g++ -std=c++20 -Itier4/applet-mitm/source tier4/applet-mitm/test/armfile_test.cpp -o $tmp/armfile_test && $tmp/armfile_test"
 run "version order for the updaters (common/sft_version.h)" \
     bash -c "gcc -std=c99 -Wall common/test/version_test.c -o $tmp/version_test && $tmp/version_test"
+run "viewer messages: old words, controller state, TCP split anywhere (v0.7.20)" \
+    bash -c "g++ -std=c++20 -Wall -Itier4/applet-mitm/source tier4/applet-mitm/test/viewermsg_test.cpp -o $tmp/viewermsg_test && $tmp/viewermsg_test"
 run "early encode collection: pending, ready, once only, cancelled (PR #12)" \
     bash -c "g++ -std=c++20 -Itier4/applet-mitm/source tier4/applet-mitm/test/idlework_test.cpp -o $tmp/idlework_test && $tmp/idlework_test"
 run "screenshot PNG: de-swizzle + stored-deflate writer, checked with zlib" \
@@ -44,6 +46,7 @@ run "nvp_check: IDR + P GOP, drift test" python3 tools/nvp_check.py selftest
 run "raw-view builds (with H.264)" bash -c "make -s -B -C tools/raw-recv raw-view | grep -q 'WITH H.264'"
 run "stream end to end: console packets -> raw-view -> H.264" python3 tools/sft_stream_test.py
 run "recording: console H.264 + audio -> MP4 (every frame decodes, AAC at 440 Hz)" bash tools/raw-recv/mp4_record_test.sh
+run "controller: raw-view -> a fake console (virtual controller, keepalive, only when asked; v0.7.20)" python3 tools/raw-recv/pad_test.py
 run "sft_tool: stats, gaps, decode check, head, drift test, artifact detector" python3 tools/sft_tool.py selftest
 run "nvrec: Run E's grc scan decodes as committed" \
     bash -c "python3 tools/nvrec.py logs/m79-runE-grc-scan.bin --out $tmp/setups > $tmp/scan.txt && diff <(grep -v -- '-> ' logs/m79-runE-grc-scan.txt | sed 's/[[:space:]]*\$//') <(grep -v -- '-> ' $tmp/scan.txt | sed 's/[[:space:]]*\$//') >/dev/null"
