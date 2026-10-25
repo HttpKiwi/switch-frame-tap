@@ -11,6 +11,7 @@ finish-args:
   - --filesystem=xdg-run/pipewire-0
   - --device=dri
   - --device=usb
+  - --device=input   # v0.7.20: gamepads that play the Switch (evdev / hidraw)
   - --filesystem=xdg-videos
   - --share=network
 modules:
