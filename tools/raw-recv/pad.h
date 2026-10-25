@@ -51,7 +51,7 @@ static int g_pad_pv_on = 0;                /* the Controller page is open: keep 
 static pad_state g_pad_pv;
 
 static int g_mouse_cap = 0;                /* the mouse is taken */
-static int g_mouse_down = 0;               /* bit per MB_LEFT..MB_X2 */
+static int g_mouse_down = 0;               /* bit per PMB_LEFT..PMB_X2 */
 static Uint64 g_wheel_until[2];            /* wheel up / down: a press that lasts a moment */
 static double g_mdx = 0, g_mdy = 0;        /* movement since the last stick update, pixels */
 static double g_mox = 0, g_moy = 0;        /* the mouse stick now, -1..1 */
@@ -140,11 +140,11 @@ static void pad_mouse_button(int sdl_button, int down)
 {
     int m = -1;
     switch (sdl_button) {
-    case SDL_BUTTON_LEFT: m = MB_LEFT; break;
-    case SDL_BUTTON_RIGHT: m = MB_RIGHT; break;
-    case SDL_BUTTON_MIDDLE: m = MB_MIDDLE; break;
-    case SDL_BUTTON_X1: m = MB_X1; break;
-    case SDL_BUTTON_X2: m = MB_X2; break;
+    case SDL_BUTTON_LEFT: m = PMB_LEFT; break;
+    case SDL_BUTTON_RIGHT: m = PMB_RIGHT; break;
+    case SDL_BUTTON_MIDDLE: m = PMB_MIDDLE; break;
+    case SDL_BUTTON_X1: m = PMB_X1; break;
+    case SDL_BUTTON_X2: m = PMB_X2; break;
     }
     if (m < 0) return;
     if (down) g_mouse_down |= 1 << m; else g_mouse_down &= ~(1 << m);
@@ -272,10 +272,10 @@ static void pad_apply_controller(SDL_GameController *c, pad_state *s)
 static void pad_apply_mouse(pad_state *s)
 {
     const Uint64 now = SDL_GetTicks64();
-    for (int m = MB_LEFT; m <= MB_X2; m++)
+    for (int m = PMB_LEFT; m <= PMB_X2; m++)
         if (((g_mouse_down >> m) & 1) && g_bind_mouse[m] >= 0) s->b |= 1ull << ps_hidbit[g_bind_mouse[m]];
     for (int w = 0; w < 2; w++)
-        if (now < g_wheel_until[w] && g_bind_mouse[MB_WHEEL_UP + w] >= 0) s->b |= 1ull << ps_hidbit[g_bind_mouse[MB_WHEEL_UP + w]];
+        if (now < g_wheel_until[w] && g_bind_mouse[PMB_WHEEL_UP + w] >= 0) s->b |= 1ull << ps_hidbit[g_bind_mouse[PMB_WHEEL_UP + w]];
     if (!g_mlast) g_mlast = now;
     const double dt = (double)(now - g_mlast);
     if (dt >= 8) {

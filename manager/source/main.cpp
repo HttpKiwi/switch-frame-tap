@@ -41,7 +41,7 @@
 
 namespace {
 
-    constexpr const char *AppVersion  = "0.7.19";
+    constexpr const char *AppVersion  = "0.7.20-beta1";
     constexpr u64 ModuleTid           = 0x0100000000000C20ull;
     constexpr const char *ModuleDir   = "sdmc:/atmosphere/contents/0100000000000C20";
     constexpr const char *ModuleNsp   = "sdmc:/atmosphere/contents/0100000000000C20/exefs.nsp";
@@ -336,7 +336,7 @@ namespace {
             "# homebrew_docked: 1 = homebrew started from the Homebrew Menu is told the console is docked, so apps that\n"
             "#                  choose their resolution from that draw at 1080p (beta). From the next app started.\n"
             "homebrew_docked = %d\n"
-            "# viewer_input: 1 = a controller on the PC plays the Switch through the PC viewer (an extra Pro Controller, beta)\n"
+            "# viewer_input: 1 = a controller, keyboard or mouse on the PC plays the Switch through the PC viewer (an extra Pro Controller, beta)\n"
             "viewer_input = %d\n"
             "# update_betas: 1 = Check for updates in the app also offers betas (pre-releases)\n"
             "update_betas = %d\n",
@@ -821,10 +821,11 @@ namespace {
                     "Not for homebrew opened from the Album: there it has too little memory for 1080p."));
                 /* v0.7.20 */
                 p.rows.push_back(Section("Right away"));
-                p.rows.push_back(Toggle("Controller from the PC viewer", [this] { return set.viewer_input; },
+                p.rows.push_back(Toggle("Controls from the PC viewer", [this] { return set.viewer_input; },
                     [this](int) { set.viewer_input = !set.viewer_input; Saved(); },
-                    "A controller connected to the PC plays the Switch through the PC viewer: it shows up here as one more "
+                    "A controller, the keyboard or the mouse of the PC play the Switch through the PC viewer: they show up here as one more "
                     "Pro Controller while the viewer is open, over USB or the network, in games and the HOME menu. "
+                    "Which of them play, and what each key does, is set in the viewer's Controller menu (top left, or G). "
                     "If a game only listens to one controller, pick it in Controllers > Change Grip/Order. "
                     "The viewer needs version 0.7.20 or later."));
                 pages.push_back(std::move(p));

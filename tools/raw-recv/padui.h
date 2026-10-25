@@ -93,7 +93,7 @@ static void pui_mouse_binds(SDL_Renderer *ren, float cx, float xr, float *y)
     vw = floorf(vw); aw = floorf(aw);
     const float x = floorf(xr - vw - 2 * aw);
     ui_section(ren, cx, y, "BUTTONS");
-    for (int m = 0; m < MB_N; m++) {
+    for (int m = 0; m < PMB_N; m++) {
         const int px = ui_px(16);
         ui_row(H_PADMBTN, m * 2 + 1, *y, h);
         ui_text_fit(ren, mb_name[m], (int)cx, (int)(*y + (h - px * 1.18f) / 2), px, 0, UI_INK, 0, (int)(x - cx - ui_d(8)));

@@ -30,10 +30,10 @@ static const char *const ps_key[PS_N] = {      /* the names in viewer.ini */
     "lsup", "lsleft", "lsdown", "lsright", "rsup", "rsleft", "rsdown", "rsright" };
 
 enum { CT_TRIG_L = 100, CT_TRIG_R = 101 };   /* a controller code: an SDL button (0..) or one of these */
-enum { MB_LEFT, MB_RIGHT, MB_MIDDLE, MB_X1, MB_X2, MB_WHEEL_UP, MB_WHEEL_DOWN, MB_N };
-static const char *const mb_name[MB_N] = { "Left button", "Right button", "Middle button", "Back button", "Forward button",
+enum { PMB_LEFT, PMB_RIGHT, PMB_MIDDLE, PMB_X1, PMB_X2, PMB_WHEEL_UP, PMB_WHEEL_DOWN, PMB_N };
+static const char *const mb_name[PMB_N] = { "Left button", "Right button", "Middle button", "Back button", "Forward button",
                                            "Wheel up", "Wheel down" };
-static const char *const mb_key[MB_N] = { "left", "right", "middle", "x1", "x2", "wup", "wdown" };
+static const char *const mb_key[PMB_N] = { "left", "right", "middle", "x1", "x2", "wup", "wdown" };
 
 static int g_pad_send = 1;                 /* a controller on this computer plays the Switch */
 static int g_pad_kbd = 0;                  /* ...and the keyboard (off by default: it takes the letter keys) */
@@ -47,7 +47,7 @@ static char g_pad_pref[64] = "";           /* the controller to use when it is c
 
 static int g_bind_kb[2][PS_N];             /* SDL scancodes, 0 = none */
 static int g_bind_ctl[PS_NBTN];            /* SDL_GameControllerButton or CT_TRIG_*, -1 = none */
-static int g_bind_mouse[MB_N];             /* a button (PS_A..PS_CAPTURE), -1 = none */
+static int g_bind_mouse[PMB_N];             /* a button (PS_A..PS_CAPTURE), -1 = none */
 
 static const struct { const char *name; int *v; int lo, hi, step, def; const char *unit; } pad_sliders[] = {
     { "Stick dead zone",  &g_pad_dz,   0, 30, 1, 8,  "%" },
@@ -110,12 +110,12 @@ static void pcfg_defaults_ctl(void)
 
 static void pcfg_defaults_mouse(void)
 {
-    for (int i = 0; i < MB_N; i++) g_bind_mouse[i] = -1;
-    g_bind_mouse[MB_LEFT] = PS_ZR;
-    g_bind_mouse[MB_RIGHT] = PS_ZL;
-    g_bind_mouse[MB_MIDDLE] = PS_R3;
-    g_bind_mouse[MB_X1] = PS_L;
-    g_bind_mouse[MB_X2] = PS_R;
+    for (int i = 0; i < PMB_N; i++) g_bind_mouse[i] = -1;
+    g_bind_mouse[PMB_LEFT] = PS_ZR;
+    g_bind_mouse[PMB_RIGHT] = PS_ZL;
+    g_bind_mouse[PMB_MIDDLE] = PS_R3;
+    g_bind_mouse[PMB_X1] = PS_L;
+    g_bind_mouse[PMB_X2] = PS_R;
     g_pad_mstick = 0; g_pad_msens = 50; g_pad_minvert = 0;
 }
 
@@ -193,7 +193,7 @@ static void pad_prefs_load(const char *line)
         char mb[24], to[24];
         if (sscanf(line, "mouse_btn_%23[a-z0-9]=%23[a-z0-9]", mb, to) == 2) {
             int m = -1;
-            for (int i = 0; i < MB_N; i++) if (!strcmp(mb, mb_key[i])) m = i;
+            for (int i = 0; i < PMB_N; i++) if (!strcmp(mb, mb_key[i])) m = i;
             const int s = !strcmp(to, "none") ? -1 : pcfg_slot_by_key(to);
             const int known = !strcmp(to, "none") || (s >= 0 && s < PS_NBTN);
             if (m >= 0 && known) g_bind_mouse[m] = s;
@@ -209,6 +209,6 @@ static void pad_prefs_save(FILE *f)
     if (g_pad_pref[0]) fprintf(f, "controller_name=%s\n", g_pad_pref);
     for (int s = 0; s < PS_N; s++) fprintf(f, "key_%s=%d,%d\n", ps_key[s], g_bind_kb[0][s], g_bind_kb[1][s]);
     for (int s = 0; s < PS_NBTN; s++) fprintf(f, "pad_%s=%d\n", ps_key[s], g_bind_ctl[s]);
-    for (int m = 0; m < MB_N; m++)
+    for (int m = 0; m < PMB_N; m++)
         fprintf(f, "mouse_btn_%s=%s\n", mb_key[m], g_bind_mouse[m] >= 0 ? ps_key[g_bind_mouse[m]] : "none");
 }
