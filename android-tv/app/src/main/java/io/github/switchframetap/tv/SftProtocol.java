@@ -14,6 +14,10 @@ final class SftProtocol {
      *  console scales such frames itself. Accepted anyway, so a frame meant for
      *  another viewer never drops the connection. */
     static final int CROP = 32, CROP_MID = 64;
+    /** v0.7.20 consoles with "Controls from the PC viewer" on set this on every header
+     *  but plain audio: they take a controller from the viewer. This app sends none
+     *  (yet), so the bit is dropped on read and never reaches the format checks. */
+    static final int INPUT = 128;
     static final int MAX_VIDEO = 8 * 1024 * 1024, MAX_AUDIO = 65536, MAX_STATUS = 4096;
     interface Stop { boolean stopped(); }
     interface Source extends AutoCloseable {
@@ -60,7 +64,7 @@ final class SftProtocol {
             receivedNs = System.nanoTime();
             if (u32(h, 0) != 0x52544653L) throw new IOException("Invalid SFTR header");
             if (u16(h, 4) != 2) throw new IOException("SFTR protocol v2 is required");
-            flags = u16(h, 6);
+            flags = u16(h, 6) & ~INPUT;
             w = u32(h, 8); height = u32(h, 12); n = u32(h, 20);
             // An empty header is the console checking that a viewer reads (USB): nothing follows.
             if (flags == 0 && n == 0) continue;

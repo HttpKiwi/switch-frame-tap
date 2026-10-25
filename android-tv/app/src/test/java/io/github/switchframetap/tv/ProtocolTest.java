@@ -79,7 +79,15 @@ public final class ProtocolTest {
         SftProtocol.Packet cropped = SftProtocol.readPacket(new Chunks(wire(2 | 4 | 32 | 64, 1920, 1080, 5, nal)), () -> false);
         check(cropped.key() && Arrays.equals(cropped.data, nal), "cropped video frames accepted");
         invalid(wire(8 | 32, 48000, 2, 0, audio), "a crop on audio");
-        invalid(wire(2 | 128, 1280, 720, 0, nal), "unknown flags still rejected");
+        invalid(wire(2 | 1, 1280, 720, 0, nal), "unknown flags still rejected");
+        // v0.7.20 consoles with input on add flag 128 to video, status and the empty keep-alive headers
+        SftProtocol.Packet inputVideo = SftProtocol.readPacket(new Chunks(wire(2 | 4 | 128, 1280, 720, 7, nal)), () -> false);
+        check(inputVideo.key() && inputVideo.width == 1280 && Arrays.equals(inputVideo.data, nal), "flag 128 on video accepted");
+        SftProtocol.Packet inputStatus = SftProtocol.readPacket(new Chunks(wire(24 | 128, 0, 0, 3, st)), () -> false);
+        check(inputStatus.status() && inputStatus.statusReason() == 1, "flag 128 on a status packet accepted");
+        ByteArrayOutputStream inputHello = new ByteArrayOutputStream();
+        inputHello.write(wire(128, 0, 0, 0, new byte[0])); inputHello.write(wire(8, 48000, 2, 4, audio));
+        check(SftProtocol.readPacket(new Chunks(inputHello.toByteArray()), () -> false).sequence == 4, "flag-128-only keep-alive skipped");
         // v0.7.16 recordings: an MP4 sample is the picture NAL units only
         byte[] picOnly = SftProtocol.pictureNals(new byte[]{0,0,0,1,0x09,0x10, 0,0,0,1,0x67,0x64,0, 0,0,1,0x68,0x12, 0,0,1,0x06,5,5, 0,0,1,0x65,9,8, 0,0,0,1,0x41,7});
         check(Arrays.equals(picOnly, new byte[]{0,0,0,1,0x65,9,8, 0,0,0,1,0x41,7}), "AUD, SPS, PPS and SEI left out of a sample");
