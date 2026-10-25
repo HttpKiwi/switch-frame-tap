@@ -6740,6 +6740,7 @@ namespace ams::mitm::applet {
             u64 prev_read_ns = 0;      /* the last read without the collections inside it */
             u32 mid_collects = 0;
             u64 mid_poll_ns = 0;       /* the polls and collections inside the running read */
+            u64 mid_poll_sum = 0;      /* the same, over all reads (the loop split of a window) */
             static constexpr u64 MidReadMinNs = UINT64_C(6000000);
             u64 last_flush_ns = 0;
 
@@ -7027,7 +7028,8 @@ namespace ams::mitm::applet {
                         if (mid && off + n < bytes && idle_work.fn != nullptr) {
                             const u64 tp = armTicksToNs(armGetSystemTick());
                             const bool sent_it = idle_work.Poll();
-                            mid_poll_ns += armTicksToNs(armGetSystemTick()) - tp;
+                            const u64 dp = armTicksToNs(armGetSystemTick()) - tp;
+                            mid_poll_ns += dp; mid_poll_sum += dp;
                             if (sent_it) { ++mid_collects; }
                         }
                     }
@@ -8007,6 +8009,8 @@ namespace ams::mitm::applet {
             u64 w_read = 0, w_flush = 0, w_vic = 0, w_enc = 0, w_fence0 = 0;
             u64 w_u_wait = 0, w_u_audio = 0, w_u_hdr = 0, w_u_post = 0;   /* v0.7.21: where the USB time of a frame goes */
             u32 w_u_audio_n = 0, w_u_n = 0;
+            u64 lp_cap = 0, lp_vic = 0, lp_col = 0, lp_sub = 0, lp_slp = 0, lp_poll0 = 0;   /* v0.7.21: where one trip round the loop goes */
+            u32 lp_n = 0;
             u32 w_n = 0, w_sent0 = 0, w_fwait0 = 0, w_ready0 = 0, w_waited0 = 0, w_drop0 = 0;
             u64 w_t0 = armTicksToNs(armGetSystemTick());
             InFlight fl = {};
@@ -8297,6 +8301,7 @@ namespace ams::mitm::applet {
 
                 /* collect frame i-1 before touching the setups or the bitstream */
                 if (fl.active && collect(fl)) { break; }
+                const u64 t2c = armTicksToNs(armGetSystemTick());
 
                 /* this frame's place in the GOP: 0 is an IDR */
                 /* v0.6: the experiment - every 600 frames, log the window and
@@ -8385,6 +8390,8 @@ namespace ams::mitm::applet {
                     fl.active = false; why = "NVENC submit rejected"; end = StreamEnd::Failed; break;
                 }
                 if (!pipe && collect(fl)) { break; }
+                const u64 t3s = armTicksToNs(armGetSystemTick());
+                lp_cap += t1 - t0; lp_vic += t2 - t1; lp_col += t2c - t2; lp_sub += t3s - t2c; ++lp_n;
 
                 /* M93/v0.7.1-v0.7.8: has the game switched between a 720p and a
                  * 1080p picture (docked/undocked, ReverseNX)? SizeCheck: a few
@@ -8425,6 +8432,17 @@ namespace ams::mitm::applet {
                                     static_cast<unsigned long long>(w_u_wait / w_u_n / 1000), static_cast<unsigned long long>(w_u_audio / w_u_n / 1000), w_u_audio_n,
                                     static_cast<unsigned long long>(w_u_hdr / w_u_n / 1000), static_cast<unsigned long long>(w_u_post / w_u_n / 1000));
                             w_u_wait = w_u_audio = w_u_hdr = w_u_post = 0; w_u_audio_n = w_u_n = 0;
+                        }
+                        if (lp_n != 0) {
+                            const u64 per = wn > w_t0 ? (wn - w_t0) / lp_n : 0;
+                            const u64 polls = s.mid_poll_sum - lp_poll0;
+                            LogLine("   nvstream loop split per trip avg us (%u trips, %llu in all): get the picture %llu (mid-read polls %llu of it), VIC %llu, collect the last frame %llu, build+submit %llu, sleep %llu; the rest (logging, checks) %lld",
+                                    lp_n, static_cast<unsigned long long>(per / 1000), static_cast<unsigned long long>(lp_cap / lp_n / 1000),
+                                    static_cast<unsigned long long>(polls / lp_n / 1000), static_cast<unsigned long long>(lp_vic / lp_n / 1000),
+                                    static_cast<unsigned long long>(lp_col / lp_n / 1000), static_cast<unsigned long long>(lp_sub / lp_n / 1000),
+                                    static_cast<unsigned long long>(lp_slp / lp_n / 1000),
+                                    static_cast<long long>((static_cast<long long>(per) - static_cast<long long>((lp_cap + lp_vic + lp_col + lp_sub + lp_slp) / lp_n)) / 1000));
+                            lp_cap = lp_vic = lp_col = lp_sub = lp_slp = 0; lp_n = 0; lp_poll0 = s.mid_poll_sum;
                         }
                         LogLine("   nvstream window: %llu.%llu fps sent; per frame avg us: read %llu (flush %llu of it)  VIC %llu  NVENC wait %llu  GPU fence %llu; "
                                 "presents: %u already drawn, %u waited for, %u skipped",
@@ -8471,7 +8489,9 @@ namespace ams::mitm::applet {
                 }
                 /* hand the core back: every thread in this process shares core 3
                  * with the IPC thread that answers the game (M60b) */
+                const u64 tsl0 = armTicksToNs(armGetSystemTick());
                 os::SleepThread(TimeSpan::FromMicroSeconds(500));
+                lp_slp += armTicksToNs(armGetSystemTick()) - tsl0;
             }
             /* never leave the channel with a job in flight (M74): collect it,
              * and send it too if the stream is still healthy */
