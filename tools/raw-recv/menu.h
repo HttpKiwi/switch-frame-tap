@@ -190,6 +190,56 @@ static void ui_pin_init(SDL_Renderer *ren)
     }
 }
 
+/* v0.7.20: the Controller menu's icon - a gamepad: body, two grips, a d-pad
+ * and two buttons cut out */
+static SDL_Texture *g_ui_pad = NULL;
+static SDL_Renderer *g_ui_pad_ren = NULL;
+
+static int ui_pad_rr(float x, float y, float x0, float y0, float x1, float y1, float r)
+{
+    const float cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    float dx = fabsf(x - cx) - ((x1 - x0) / 2 - r), dy = fabsf(y - cy) - ((y1 - y0) / 2 - r);
+    if (dx < 0) dx = 0;
+    if (dy < 0) dy = 0;
+    return dx * dx + dy * dy <= r * r;
+}
+
+static int ui_pad_disc(float x, float y, float cx, float cy, float r)
+{
+    return (x - cx) * (x - cx) + (y - cy) * (y - cy) <= r * r;
+}
+
+static void ui_pad_init(SDL_Renderer *ren)
+{
+    if (g_ui_pad && g_ui_pad_ren == ren) return;
+    enum { D = 96 };
+    static Uint32 px[D * D];
+    for (int y = 0; y < D; y++)
+        for (int x = 0; x < D; x++) {
+            int in = 0;
+            for (int sy = 0; sy < 4; sy++)
+                for (int sx = 0; sx < 4; sx++) {
+                    const float fx = x + (sx + 0.5f) / 4, fy = y + (sy + 0.5f) / 4;
+                    const int body = ui_pad_rr(fx, fy, 9, 22, 87, 58, 17) || ui_pad_disc(fx, fy, 26, 60, 15) ||
+                                     ui_pad_disc(fx, fy, 70, 60, 15);
+                    if (!body) continue;
+                    if (ui_pad_rr(fx, fy, 31 - 3.3f, 40 - 9, 31 + 3.3f, 40 + 9, 1.2f) ||          /* the d-pad */
+                        ui_pad_rr(fx, fy, 31 - 9, 40 - 3.3f, 31 + 9, 40 + 3.3f, 1.2f) ||
+                        ui_pad_disc(fx, fy, 62, 45, 4.4f) || ui_pad_disc(fx, fy, 72, 36, 4.4f))      /* the buttons */
+                        continue;
+                    in++;
+                }
+            px[y * D + x] = ((Uint32)(in * 255 / 16) << 24) | 0xFFFFFFu;
+        }
+    g_ui_pad = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, D, D);
+    g_ui_pad_ren = ren;
+    if (g_ui_pad) {
+        SDL_UpdateTexture(g_ui_pad, NULL, px, D * 4);
+        SDL_SetTextureBlendMode(g_ui_pad, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(g_ui_pad, SDL_ScaleModeLinear);
+    }
+}
+
 static void ui_rrect(SDL_Renderer *ren, float x, float y, float w, float h, float r, SDL_Color c)
 {
     if (w <= 0 || h <= 0) return;

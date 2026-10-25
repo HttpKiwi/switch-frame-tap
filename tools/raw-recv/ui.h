@@ -19,6 +19,8 @@ static const SDL_Color UI_BG = { 12, 14, 18, 255 }, UI_SURF = { 21, 24, 30, 255 
                        UI_BAD = { 248, 113, 113, 255 };
 
 static int g_ui_open = 0;                  /* the settings drawer */
+static int g_ui_page = 0;                  /* ...which page: 0 Settings, 1 Controller (padui.h) */
+static int g_pad_tab = 0;                  /* the Controller page's tab: 0 keyboard, 1 mouse, 2 controller */
 static int g_ui_focus = 0, g_ui_kbd = 0;   /* the row the keys are on; shown after a key */
 static float g_ui_scroll = 0, g_ui_content_h = 0;
 static float g_home_scroll = 0, g_home_content_h = 0;
@@ -47,16 +49,19 @@ static int ui_px(int px)
     return v < 11 ? 11 : v; /* floor: still readable on mobile */
 }
 static void ui_open(int open);
+static void ui_page(int page);
 
 enum { H_NONE, H_SETTINGS, H_CLOSE, H_BACKDROP, H_CONN, H_IP, H_FULL, H_VSYNC, H_ASPECT, H_CHROMELESS, H_UPS, H_HUD, H_HWDEC,
        H_PIC, H_PIC_RESET, H_SOUND, H_REC, H_PANEL, H_FSR_SHARP, H_SUPPORT, H_SCROLL,
-       H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE, H_UPD, H_UPD_BETA, H_UPD_AUTO, H_PIN, H_REC1, H_PAD, H_PADKB };
+       H_WIN_MIN, H_WIN_MAX, H_WIN_CLOSE, H_UPD, H_UPD_BETA, H_UPD_AUTO, H_PIN, H_REC1, H_PAD, H_PADKB,
+       H_PADMENU, H_PADBACK, H_PADMOUSE, H_PADTAB, H_PADBIND, H_PADMBTN, H_PADMODE, H_PADINV, H_PADSL, H_PADCHANGE,
+       H_PADSWAP, H_PADRESET };
 
 typedef struct { SDL_FRect r; int id, arg, window_space; } ui_hit_t;
-static ui_hit_t g_ui_hits[96];
+static ui_hit_t g_ui_hits[256];
 static int g_ui_nhits;
 /* the drawer's rows in order, for the keys: (id, arg) */
-static struct { int id, arg; float y, h; } g_ui_rows[24];
+static struct { int id, arg; float y, h; } g_ui_rows[128];
 static int g_ui_nrows;
 
 static void ui_hit(float x, float y, float w, float h, int id, int arg)
@@ -108,8 +113,8 @@ static void ui_text_fit(SDL_Renderer *ren, const char *s, int x, int y, int px, 
     text_draw(ren, b, x, y, px, bold, c, align);
 }
 
-/* centred lines, broken at spaces to fit maxw; returns the height used */
-static int ui_wrap(SDL_Renderer *ren, const char *s, int cx, int y, int px, int bold, SDL_Color c, int maxw, int lh)
+/* lines broken at spaces to fit maxw; returns the height used. align as text_draw: 0 = x is the left edge, 1 = x is the centre */
+static int ui_wrap_a(SDL_Renderer *ren, const char *s, int x, int y, int px, int bold, SDL_Color c, int maxw, int lh, int align)
 {
     char line[256];
     int used = 0;
@@ -123,12 +128,17 @@ static int ui_wrap(SDL_Renderer *ren, const char *s, int cx, int y, int px, int 
         }
         size_t take = s[n] ? (last_space ? last_space : n) : n;
         memcpy(line, s, take); line[take] = 0;
-        text_draw(ren, line, cx, y + used, px, bold, c, 1);
+        text_draw(ren, line, x, y + used, px, bold, c, align);
         used += lh;
         s += take;
         while (*s == ' ') s++;
     }
     return used;
+}
+
+static int ui_wrap(SDL_Renderer *ren, const char *s, int cx, int y, int px, int bold, SDL_Color c, int maxw, int lh)
+{
+    return ui_wrap_a(ren, s, cx, y, px, bold, c, maxw, lh, 1);
 }
 
 /* ---- the controls ------------------------------------------------------ */
@@ -277,6 +287,31 @@ static void ui_gear_button(SDL_Renderer *ren, float xr, float y, float d, SDL_Co
     ui_chrome_hit(x, y, d, id);
 }
 
+/* the controller button: a gamepad in a round button at the top left, "Controller" beside it on hover */
+static void ui_pad_button(SDL_Renderer *ren, float x, float y, float d, SDL_Color bg, int id)
+{
+    const float inset = d * 0.17f;
+    const int hov = ui_in(x, y, d, d);
+    SDL_Color b = bg;
+    if (hov) { b = UI_SURF3; b.a = bg.a > 230 ? bg.a : 230; }
+    ui_rrect(ren, x, y, d, d, d / 2, b);
+    ui_pad_init(ren);
+    if (g_ui_pad) {
+        SDL_SetTextureColorMod(g_ui_pad, UI_INK.r, UI_INK.g, UI_INK.b);
+        SDL_SetTextureAlphaMod(g_ui_pad, 255);
+        const SDL_FRect g = { x + inset, y + inset, d - inset * 2, d - inset * 2 };
+        SDL_RenderCopyF(ren, g_ui_pad, NULL, &g);
+    }
+    if (hov) {
+        const int px = d >= 38.f ? 14 : d >= 32.f ? 13 : 12;
+        const float tw = text_width("Controller", px, 1) + d * 0.48f;
+        const float th = d * 0.62f, ty = y + (d - th) * 0.5f, tx = x + d + d * 0.19f;
+        ui_rrect(ren, tx, ty, tw, th, th * 0.5f, (SDL_Color){ 21, 24, 30, 230 });
+        text_draw(ren, "Controller", (int)(tx + tw * 0.5f), (int)(ty + th * 0.18f), px, 1, UI_INK, 1);
+    }
+    ui_chrome_hit(x, y, d, id);
+}
+
 /* Borderless window controls (min / max / close), drawn left of the gear. */
 static void ui_win_btn(SDL_Renderer *ren, float x, float y, float d, int id, int danger)
 {
@@ -353,8 +388,30 @@ static int ui_chrome_layout(int ow, float *xs, int *ids, float *out_d, float *ou
     }
     ids[n] = H_PIN;      xs[n] = right - d; n++; right -= d + gap;
     ids[n] = H_SETTINGS; xs[n] = right - d; n++;
+    ids[n] = H_PADMENU;  xs[n] = margin; n++;       /* top left, the mirror of the gear */
     *out_d = d; *out_y = y;
     return n;
+}
+
+/* how far from the left edge the top-left button reaches (output pixels, with a gap):
+ * the stats overlay, the REC badge and the brand sit right of it */
+static float ui_chrome_left_extent_px(SDL_Renderer *ren)
+{
+    int ow = 0, oh = 0;
+    SDL_GetRendererOutputSize(ren, &ow, &oh);
+    const float dens = ui_chrome_dens(ow > 0 ? ow : 1280);
+    return (10.f + 42.f + 8.f) * dens;
+}
+
+/* the same, in 720p units over the picture (the picture may not reach the window's edge) */
+static float ui_left_inset720(SDL_Renderer *ren, int W, int H)
+{
+    int ow = 0, oh = 0;
+    SDL_GetRendererOutputSize(ren, &ow, &oh);
+    if (ow < 80 || oh < 40 || W <= 0 || H <= 0) return 0;
+    const float s = fminf((float)ow / (float)W, (float)oh / (float)H);
+    const float need = ui_chrome_left_extent_px(ren) - ((float)ow - (float)W * s) * 0.5f;
+    return need > 0 ? need / s / ((float)H / 720.f) : 0;
 }
 
 /* Hit-test chrome from geometry alone (does not depend on the last paint). */
@@ -363,8 +420,8 @@ static int ui_chrome_at(SDL_Renderer *ren, float wx, float wy, int *out_id)
     int ow = 0, oh = 0;
     SDL_GetRendererOutputSize(ren, &ow, &oh);
     if (ow < 80 || oh < 40) return 0;
-    float xs[5], d = 42.f, y = 10.f;
-    int ids[5];
+    float xs[6], d = 42.f, y = 10.f;
+    int ids[6];
     const int n = ui_chrome_layout(ow, xs, ids, &d, &y);
     const float pad = d * 0.14f;
     for (int i = 0; i < n; i++) {
@@ -380,7 +437,8 @@ static int ui_chrome_at(SDL_Renderer *ren, float wx, float wy, int *out_id)
 static void ui_chrome_activate(SDL_Window *win, int id)
 {
     switch (id) {
-    case H_SETTINGS: ui_open(1); break;
+    case H_SETTINGS: ui_open(1); ui_page(0); break;
+    case H_PADMENU: ui_open(1); ui_page(1); break;
     case H_PIN: act_always_on_top(win, !g_always_on_top); break;
     case H_WIN_MIN: if (win) SDL_MinimizeWindow(win); break;
     case H_WIN_MAX:
@@ -402,13 +460,16 @@ static void ui_top_chrome(SDL_Renderer *ren, float xr, float y, SDL_Color gear_b
     (void)xr; (void)y;
     int ow = 0, oh = 0;
     SDL_GetRendererOutputSize(ren, &ow, &oh);
-    float xs[5], d = 42.f, cy = 10.f;
-    int ids[5];
+    float xs[6], d = 42.f, cy = 10.f;
+    int ids[6];
     const int n = ui_chrome_layout(ow, xs, ids, &d, &cy);
     for (int i = 0; i < n; i++) {
         if (ids[i] == H_SETTINGS) {
             if (paint) ui_gear_button(ren, xs[i] + d, cy, d, gear_bg, H_SETTINGS);
             else ui_chrome_hit(xs[i], cy, d, H_SETTINGS);
+        } else if (ids[i] == H_PADMENU) {
+            if (paint) ui_pad_button(ren, xs[i], cy, d, gear_bg, H_PADMENU);
+            else ui_chrome_hit(xs[i], cy, d, H_PADMENU);
         } else if (ids[i] == H_PIN) {
             if (paint) ui_pin_button(ren, xs[i], cy, d);
             else ui_chrome_hit(xs[i], cy, d, H_PIN);
@@ -474,6 +535,8 @@ static void ui_label(SDL_Renderer *ren, float x, float y, float h, const char *l
 
 static const char *const ui_hud_names[HUD_MODES] = { "Off", "FPS", "Graphs", "Full" };
 
+#include "padui.h"
+
 /* Settings card at a fixed pixel size (x0,y0,pw,ph). Caller draws the veil.
  * Two columns only when the card is wide enough; narrower cards stay one column
  * so controls never collide. Header/footer shrink on short cards so the scroll
@@ -506,9 +569,9 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
     float top = y0 + head_h, bottom = y0 + ph - foot_h;
     if (bottom < top + ui_d(120)) { head_h = ui_d(48); foot_h = ui_d(4); top = y0 + head_h; bottom = y0 + ph - foot_h; }
     if (bottom <= top + ui_d(48)) {
-        text_draw(ren, "Settings", (int)cx, (int)(y0 + ui_d(16)), ui_px(20), 1, UI_INK, 0);
+        text_draw(ren, g_ui_page == 1 ? "Controller" : "Settings", (int)cx, (int)(y0 + ui_d(16)), ui_px(20), 1, UI_INK, 0);
         ui_button(ren, xr, 0, y0 + ui_d(14), "Close", UI_SURF2, UI_INK, H_CLOSE, 0, 1);
-        text_draw(ren, "Resize the window larger to use settings", (int)(x0 + pw * 0.5f), (int)(y0 + ph * 0.5f), ui_px(15), 0, UI_DIM, 1);
+        text_draw(ren, "Resize the window larger to use this", (int)(x0 + pw * 0.5f), (int)(y0 + ph * 0.5f), ui_px(15), 0, UI_DIM, 1);
         return;
     }
 
@@ -529,8 +592,10 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
     float y_l = top - g_ui_scroll, y_r = top - g_ui_scroll;
     const float y_start = y_l;
 
+    if (g_ui_page == 1) ui_pad_page(ren, cx_l, xr_l, cx_r, xr_r, col_w, use_cols == 2, &y_l, &y_r);
+
     /* ---- left column (or full width): connection + display ---- */
-    {
+    if (g_ui_page != 1) {
         float y = y_l, cxi = cx_l, cwi = col_w, xri = xr_l;
         ui_section(ren, cxi, &y, "CONNECTION");
         {
@@ -636,7 +701,7 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
     }
 
     /* ---- right column when wide; else continue below left ---- */
-    {
+    if (g_ui_page != 1) {
         float y = use_cols == 2 ? y_r : y_l;
         float cxi = use_cols == 2 ? cx_r : cx_l, cwi = col_w, xri = use_cols == 2 ? xr_r : xr_l;
 
@@ -672,18 +737,16 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
             y += h + ui_d(4);
         }
 
-        /* v0.7.20: a controller here plays the Switch (pad.h) */
+        /* v0.7.20: the controller, keyboard and mouse have their own page */
         ui_section(ren, cxi, &y, "CONTROLLER");
         {
             const float h = ui_d(48);
             char sub[160];
-            ui_row(H_PAD, 0, y, h);
-            ui_label(ren, cxi, y, h, "Play the Switch with it", pad_status(sub, sizeof(sub)), ui_focused(H_PAD, 0), cwi);
-            ui_toggle(ren, xri, y + ui_d(12), g_pad_send, H_PAD, 1);
-            y += h + ui_d(2);
-            ui_row(H_PADKB, 0, y, h);
-            ui_label(ren, cxi, y, h, "Play the Switch with the keyboard", pad_kbd_status(sub, sizeof(sub)), ui_focused(H_PADKB, 0), cwi);
-            ui_toggle(ren, xri, y + ui_d(12), g_pad_kbd, H_PADKB, 1);
+            ui_row(H_PADMENU, 0, y, h);
+            if (ui_focused(H_PADMENU, 0)) ui_rrect(ren, cxi - ui_d(12), y - 2, cwi + ui_d(24), h + 4, ui_d(10), UI_SURF2);
+            ui_text_fit(ren, "Play the Switch from here", (int)cxi, (int)(y + h / 2 - ui_d(20)), ui_px(17), 0, UI_INK, 0, (int)(cwi - ui_d(96)));
+            ui_text_fit(ren, ui_pad_summary(sub, sizeof(sub)), (int)cxi, (int)(y + h / 2 + ui_d(2)), ui_px(13), 0, UI_DIM, 0, (int)(cwi - ui_d(96)));
+            ui_button(ren, xri, 0, y + ui_d(8), "Open", UI_SURF3, UI_INK, H_PADMENU, 0, 1);
             y += h + ui_d(4);
         }
 
@@ -768,14 +831,41 @@ static void ui_drawer(SDL_Renderer *ren, float x0, float y0, float pw, float ph)
     SDL_FRect hb = { x0 + 1, y0, pw - 1, top - y0 }, fb = { x0 + 1, bottom, pw - 1, y0 + ph - bottom };
     SDL_RenderFillRectF(ren, &hb);
     SDL_RenderFillRectF(ren, &fb);
-    text_draw(ren, "Settings", (int)cx, (int)(y0 + (head_h >= ui_d(70) ? ui_d(24) : ui_d(14))),
+    text_draw(ren, g_ui_page == 1 ? "Controller" : "Settings", (int)cx, (int)(y0 + (head_h >= ui_d(70) ? ui_d(24) : ui_d(14))),
               head_h >= ui_d(70) ? ui_px(24) : ui_px(20), 1, UI_INK, 0);
-    ui_button(ren, xr, 0, y0 + (head_h >= ui_d(70) ? ui_d(22) : ui_d(12)), "Close", UI_SURF2, UI_INK, H_CLOSE, 0, 1);
+    {
+        const float by = y0 + (head_h >= ui_d(70) ? ui_d(22) : ui_d(12));
+        const float cw = ui_button(ren, xr, 0, by, "Close", UI_SURF2, UI_INK, H_CLOSE, 0, 1);
+        if (g_ui_page == 1) ui_button(ren, xr - cw - ui_d(8), 0, by, "Settings", UI_SURF2, UI_INK, H_PADBACK, 0, 1);
+    }
     SDL_SetRenderDrawColor(ren, UI_LINE.r, UI_LINE.g, UI_LINE.b, UI_LINE.a);
     SDL_FRect l1 = { x0 + 1, top - 1, pw - 1, 1 }, l2 = { x0 + 1, bottom, pw - 1, 1 };
     SDL_RenderFillRectF(ren, &l1);
     SDL_RenderFillRectF(ren, &l2);
-    if (show_footer) {
+    if (show_footer && g_ui_page == 1) {
+        float kx = cx;
+        if (g_pcap_dev) {
+            text_draw(ren, g_pcap_dev == 1 ? "Press the key you want" : "Press the button you want", (int)kx, (int)(bottom + ui_d(14)), ui_px(13), 1, UI_ACC, 0);
+            kx += text_width(g_pcap_dev == 1 ? "Press the key you want" : "Press the button you want", ui_px(13), 1) + ui_d(14);
+            kx += ui_key(ren, kx, bottom + ui_d(12), "Esc") + ui_d(6);
+            text_draw(ren, "cancel", (int)kx, (int)(bottom + ui_d(14)), ui_px(13), 0, UI_DIM, 0);
+            kx += text_width("cancel", ui_px(13), 0) + ui_d(14);
+            kx += ui_key(ren, kx, bottom + ui_d(12), "Delete") + ui_d(6);
+            text_draw(ren, "clear", (int)kx, (int)(bottom + ui_d(14)), ui_px(13), 0, UI_DIM, 0);
+        } else {
+            kx += ui_key(ren, kx, bottom + ui_d(12), "Esc") + ui_d(6);
+            text_draw(ren, "close", (int)kx, (int)(bottom + ui_d(14)), ui_px(13), 0, UI_DIM, 0);
+            kx += text_width("close", ui_px(13), 0) + ui_d(14);
+            kx += ui_key(ren, kx, bottom + ui_d(12), "Up/Down") + ui_d(6);
+            text_draw(ren, "move", (int)kx, (int)(bottom + ui_d(14)), ui_px(13), 0, UI_DIM, 0);
+            kx += text_width("move", ui_px(13), 0) + ui_d(14);
+            kx += ui_key(ren, kx, bottom + ui_d(12), "Enter") + ui_d(6);
+            text_draw(ren, "change", (int)kx, (int)(bottom + ui_d(14)), ui_px(13), 0, UI_DIM, 0);
+            kx += text_width("change", ui_px(13), 0) + ui_d(14);
+            kx += ui_key(ren, kx, bottom + ui_d(12), "Delete") + ui_d(6);
+            text_draw(ren, "clear", (int)kx, (int)(bottom + ui_d(14)), ui_px(13), 0, UI_DIM, 0);
+        }
+    } else if (show_footer) {
         float kx = cx;
         kx += ui_key(ren, kx, bottom + ui_d(12), "Esc") + ui_d(6);
         text_draw(ren, "close", (int)kx, (int)(bottom + ui_d(14)), ui_px(13), 0, UI_DIM, 0);
@@ -872,7 +962,7 @@ static void ui_rec_badge(SDL_Renderer *ren, int W, int H)
     if (s >= 3600) snprintf(t, sizeof(t), "REC %d:%02d:%02d", s / 3600, s / 60 % 60, s % 60);
     else snprintf(t, sizeof(t), "REC %d:%02d", s / 60, s % 60);
     /* top left, under the stats overlay when it is on */
-    const float tw = text_width(t, 15, 1), w = tw + 46, x = 12;
+    const float tw = text_width(t, 15, 1), w = tw + 46, x = 12 + ui_left_inset720(ren, W, H);
     const float y = g_hud == HUD_FPS ? 58 : g_hud == HUD_GRAPHS ? 258 : g_hud == HUD_FULL ? 512 : 12;
     (void)w720;
     ui_rrect(ren, x, y, w, 32, 16, (SDL_Color){ 18, 20, 25, 215 });
@@ -1167,7 +1257,7 @@ static void menu_draw(SDL_Renderer *ren)
     /* Corner chrome drawn last so it stays above the connection panel.
      * Brand uses the same density tier as the home panel. */
     {
-        const float dot = ui_d(10), bx = ui_d(16), by = ui_d(16);
+        const float dot = ui_d(10), bx = ui_chrome_left_extent_px(ren) + ui_d(4), by = ui_d(16);
         ui_rrect(ren, bx, by, dot, dot, dot * 0.5f, UI_ACC);
         text_draw(ren, "Switch Frame Tap", (int)(bx + ui_d(20)), (int)(by - ui_d(4)), ui_px(18), 1, UI_INK, 0);
     }
@@ -1214,12 +1304,24 @@ static void menu_draw(SDL_Renderer *ren)
 
 /* ---- input -------------------------------------------------------------- */
 
+static void ui_page(int page)
+{
+    g_ui_page = page;
+    g_ui_scroll = 0;
+    g_ui_focus = 0;
+    g_ui_kbd = 0;
+    g_pcap_dev = 0;
+    g_pad_pv_on = page == 1;
+    g_ui_scroll_to = -1;
+}
+
 static void ui_open(int open)
 {
     g_ui_open = open;
     g_ui_drag = 0;
-    if (open) { g_ui_kbd = 0; }
-    else g_ui_d = 1.f;
+    g_pcap_dev = 0;
+    if (open) { g_ui_kbd = 0; pad_mouse_grab(0, NULL); }
+    else { g_ui_d = 1.f; g_ui_page = 0; g_pad_pv_on = 0; }
 }
 
 /* change the row's value: d = -1 / +1 (Left / Right), 0 = Enter */
@@ -1236,6 +1338,22 @@ static void ui_change(SDL_Window *win, SDL_Renderer *ren, int id, int arg, int d
     case H_REC1: act_rec_one_file(!g_rec_one_file); break;
     case H_PAD: act_pad_send(!g_pad_send); break;
     case H_PADKB: act_pad_kbd(!g_pad_kbd); break;
+    case H_PADMOUSE: act_pad_mouse(!g_pad_mouse); break;
+    case H_PADMENU: if (d == 0) ui_page(1); break;
+    case H_PADTAB: g_pad_tab = d < 0 ? (g_pad_tab + 2) % 3 : (g_pad_tab + 1) % 3; break;
+    case H_PADBIND: if (d == 0) pui_capture(arg); break;
+    case H_PADMBTN: pui_mouse_cycle(arg / 2, d ? d : 1); break;
+    case H_PADMODE: g_pad_mstick = !g_pad_mstick; prefs_save(); break;
+    case H_PADINV: g_pad_minvert = !g_pad_minvert; prefs_save(); break;
+    case H_PADSL: {
+        int *v = pad_sliders[arg].v;
+        *v = d == 0 ? pad_sliders[arg].def : SDL_clamp(*v + d * pad_sliders[arg].step, pad_sliders[arg].lo, pad_sliders[arg].hi);
+        prefs_save();
+        break;
+    }
+    case H_PADCHANGE: if (d == 0) pad_cycle(); break;
+    case H_PADSWAP: if (d == 0) pui_swap(); break;
+    case H_PADRESET: if (d == 0) act_pad_defaults(arg); break;
     case H_UPS: act_upscaler(ren, d < 0 ? (g_upscaler + UP_COUNT - 1) % UP_COUNT : (g_upscaler + 1) % UP_COUNT); break;
     case H_HUD: act_hud(d < 0 ? (g_hud + HUD_MODES - 1) % HUD_MODES : (g_hud + 1) % HUD_MODES); break;
     case H_FSR_SHARP:
@@ -1268,12 +1386,14 @@ static void ui_slide(float mx)
         if (g_ui_hits[i].window_space) mx = g_ui_wx;
         const float tx = r.x + ui_d(8), tw = r.w - ui_d(16);
         const int a = g_ui_drag_arg;
-        const int fsr = g_ui_drag == H_FSR_SHARP;
-        const int lo = fsr ? 0 : pic_rows[a].min, hi = fsr ? 100 : pic_rows[a].max, st = fsr ? 1 : pic_rows[a].step;
+        const int fsr = g_ui_drag == H_FSR_SHARP, pd = g_ui_drag == H_PADSL;
+        const int lo = fsr ? 0 : pd ? pad_sliders[a].lo : pic_rows[a].min, hi = fsr ? 100 : pd ? pad_sliders[a].hi : pic_rows[a].max;
+        const int st = fsr ? 1 : pd ? pad_sliders[a].step : pic_rows[a].step;
         float f = tw > 1.f ? (mx - tx) / tw : 0.f;
         f = f < 0 ? 0 : f > 1 ? 1 : f;
         int v = lo + (int)lrintf(f * (hi - lo) / st) * st;
         if (fsr) g_fsr_sharpness = v;
+        else if (pd) *pad_sliders[a].v = v;
         else *pic_field(a) = v;
         return;
     }
@@ -1300,7 +1420,7 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
         g_ui_ptr_inside = 1;
         g_ui_mouse_t = SDL_GetPerformanceCounter();
         g_ui_kbd = 0;
-        if (g_ui_drag == H_PIC || g_ui_drag == H_FSR_SHARP) { ui_slide(g_ui_mx); prefs_save(); }
+        if (g_ui_drag == H_PIC || g_ui_drag == H_FSR_SHARP || g_ui_drag == H_PADSL) { ui_slide(g_ui_mx); prefs_save(); }
         else if (g_ui_drag == H_SCROLL) ui_scroll_drag(g_ui_wy);
         return 1;                           /* redraw so hover chrome tracks the pointer */
     }
@@ -1324,7 +1444,19 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
             const float hy = h->window_space ? g_ui_wy : g_ui_my;
             if (!(hx >= h->r.x && hx < h->r.x + h->r.w && hy >= h->r.y && hy < h->r.y + h->r.h)) continue;
             switch (h->id) {
-            case H_SETTINGS: ui_open(1); break;
+            case H_SETTINGS: ui_open(1); if (g_ui_page) ui_page(0); break;
+            case H_PADMENU: ui_open(1); ui_page(1); break;
+            case H_PADBACK: ui_page(0); break;
+            case H_PADMOUSE: act_pad_mouse(!g_pad_mouse); break;
+            case H_PADTAB: g_pad_tab = h->arg; break;
+            case H_PADBIND: pui_capture(h->arg); break;
+            case H_PADMBTN: pui_mouse_cycle(h->arg / 2, h->arg & 1 ? 1 : -1); break;
+            case H_PADMODE: g_pad_mstick = h->arg; prefs_save(); break;
+            case H_PADINV: g_pad_minvert = !g_pad_minvert; prefs_save(); break;
+            case H_PADSL: g_ui_drag = H_PADSL; g_ui_drag_arg = h->arg; ui_slide(g_ui_mx); prefs_save(); break;
+            case H_PADCHANGE: pad_cycle(); break;
+            case H_PADSWAP: pui_swap(); break;
+            case H_PADRESET: act_pad_defaults(h->arg); break;
             case H_CLOSE: ui_open(0); break;
             case H_BACKDROP: return 0; /* don't close; allow window drag underneath */
             case H_PIN:
@@ -1375,6 +1507,11 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
         if (!g_ui_nrows) { g_ui_focus = 0; }
         return 1;
     }
+    if (k == SDLK_g && !e->key.repeat && !pad_keyboard_playing(win, !g_ui_open && !g_ip_editing)) {    /* the controller page */
+        if (g_ui_open && g_ui_page == 1) ui_open(0);
+        else { ui_open(1); ui_page(1); }
+        return 1;
+    }
     if (!g_ui_open) return 0;
     if (g_ui_nrows == 0) return 1;
     if (g_ui_focus >= g_ui_nrows) g_ui_focus = g_ui_nrows - 1;
@@ -1389,6 +1526,9 @@ static int ui_event(SDL_Window *win, SDL_Renderer *ren, const SDL_Event *e)
     case SDLK_BACKSPACE: case SDLK_DELETE:
         if (g_ui_kbd && g_ui_rows[g_ui_focus].id == H_PIC) ui_change(win, ren, H_PIC, g_ui_rows[g_ui_focus].arg, 0);
         if (g_ui_kbd && g_ui_rows[g_ui_focus].id == H_FSR_SHARP) ui_change(win, ren, H_FSR_SHARP, 0, 0);
+        if (g_ui_kbd && g_ui_rows[g_ui_focus].id == H_PADSL) ui_change(win, ren, H_PADSL, g_ui_rows[g_ui_focus].arg, 0);
+        if (g_ui_kbd && g_ui_rows[g_ui_focus].id == H_PADBIND) pui_clear(g_ui_rows[g_ui_focus].arg);
+        if (g_ui_kbd && g_ui_rows[g_ui_focus].id == H_PADMBTN) { g_bind_mouse[g_ui_rows[g_ui_focus].arg / 2] = -1; prefs_save(); }
         return 1;
     case SDLK_0: case SDLK_KP_0: g_pic = pic_default; prefs_save(); return 1;
     default: return 0;                      /* the shortcuts still work with the drawer open */

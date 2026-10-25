@@ -197,6 +197,8 @@ static void hud_sgraph(SDL_Renderer *ren, int x, int y, int w, int h, const char
     text_draw(ren, t, x + w - 8, y + 3, 15, 0, hud_ink, 2);
 }
 
+static float ui_left_inset720(SDL_Renderer *ren, int W, int H);    /* ui.h: the top-left Controller button */
+
 /* W x H: the picture (the renderer's logical size); conn: "USB" / "Network ..." */
 static void hud_draw(SDL_Renderer *ren, int W, int H, const char *conn, const char *rec)
 {
@@ -210,6 +212,7 @@ static void hud_draw(SDL_Renderer *ren, int W, int H, const char *conn, const ch
     const float k = (float)H / 720.0f;
     SDL_RenderSetScale(ren, sx * k, sy * k);
     const int w720 = (int)(W / k);
+    const int ix = 10 + (int)(ui_left_inset720(ren, W, H) + 0.5f);       /* right of the top-left button */
 
     const Uint64 now = SDL_GetPerformanceCounter();
     const double since_toast = (double)(now - g_hud_toast) / (double)SDL_GetPerformanceFrequency();
@@ -227,19 +230,19 @@ static void hud_draw(SDL_Renderer *ren, int W, int H, const char *conn, const ch
     const SDL_Color fc = hud_fps_colour();
     if (g_hud == HUD_FPS) {
         snprintf(t, sizeof(t), "%.0f fps", g_hs.have ? g_hs.fps : 0.0);
-        ui_rrect(ren, 10, 10, text_width(t, 26, 1) + 24, 40, 10, hud_panel);
-        hud_text(ren, t, 18, 12, 26, 1, fc, 0);
+        ui_rrect(ren, ix, 10, text_width(t, 26, 1) + 24, 40, 10, hud_panel);
+        hud_text(ren, t, ix + 8, 12, 26, 1, fc, 0);
     } else if (g_hud == HUD_GRAPHS) {
-        ui_rrect(ren, 10, 10, 470, 34, 8, hud_panel);
+        ui_rrect(ren, ix, 10, 470, 34, 8, hud_panel);
         snprintf(t, sizeof(t), "%.1f fps   %.1f Mbps   latency %.0f ms", g_hs.fps, g_hs.mbps, g_hs.pc + g_hs.con);
-        text_draw(ren, t, 20, 16, 19, 1, fc, 0);
+        text_draw(ren, t, ix + 10, 16, 19, 1, fc, 0);
         const float ft[] = { 16.7f, 33.3f };
-        hud_graph(ren, 10, 50, 470, 96, "FRAME TIME", "ms", &h_gap, hud_good, NULL, hud_good, 20.0f, ft, 2, 0, NULL, hud_ink, NULL, hud_ink);
+        hud_graph(ren, ix, 50, 470, 96, "FRAME TIME", "ms", &h_gap, hud_good, NULL, hud_good, 20.0f, ft, 2, 0, NULL, hud_ink, NULL, hud_ink);
         const float lt[] = { 50.0f, 100.0f };
-        hud_graph(ren, 10, 152, 470, 96, "LATENCY", "ms", &h_con, hud_blue, &h_pc, hud_warn, 40.0f, lt, 2, 0, "Switch", hud_blue, "PC", hud_warn);
+        hud_graph(ren, ix, 152, 470, 96, "LATENCY", "ms", &h_con, hud_blue, &h_pc, hud_warn, 40.0f, lt, 2, 0, "Switch", hud_blue, "PC", hud_warn);
     } else if (g_hud == HUD_FULL) {
         /* numbers on the left, graphs on the right */
-        const int lx = 10, ly = 10, lw = 340;
+        const int lx = ix, ly = 10, lw = 340;
         ui_rrect(ren, lx, ly, lw, 492, 10, hud_panel);
         int y = ly + 10;
         #define HUD_ROW(name, ...) do { text_draw(ren, name, lx + 12, y, 16, 0, hud_dim, 0); \

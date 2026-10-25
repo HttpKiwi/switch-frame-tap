@@ -127,7 +127,7 @@ static int g_lost = 0;              /* --app: the console left; wait for it agai
 static int g_paced = 0;             /* --paced: a recording fed through the live pipeline at 60 fps, looped (tests) */
 static double g_run_secs = 0;       /* --seconds: stop the live pipeline after this long (tests) */
 static const char *g_shot = NULL;    /* --shot: save the last frame drawn (overlay included) as BMP (tests) */
-static int g_open_settings = 0;      /* --settings: the settings drawer open at start (tests) */
+static int g_open_settings = 0;      /* --settings / --padmenu: the drawer open at start, on page 1 / 2 (tests) */
 static const char *g_mp4 = NULL;     /* --mp4 FILE: record into FILE from the start (tests) */
 static const char *g_rec_dir = NULL; /* --rec-dir DIR: where R saves (default Videos/Switch Frame Tap) */
 static int g_win_w = 0, g_win_h = 0;  /* --window WxH: keep the window this size (tests) */
@@ -164,8 +164,7 @@ static int g_always_on_top = 0;
 static int g_rec_one_file = 0;
 /* v0.7.20: a controller on this computer plays the Switch (pad.h); sent only
  * to a console that asks for it (config viewer_input, header flag 128) */
-static int g_pad_send = 1;
-static int g_pad_kbd = 0;                  /* ...and the keyboard (off by default: it takes the letter keys) */
+#include "padcfg.h"           /* what the Controller menu sets: bindings and options */
 static int g_drag_pending = 0, g_dragging = 0;
 static int g_drag_ox, g_drag_oy, g_drag_wx, g_drag_wy;
 static int g_drag_sx, g_drag_sy; /* global mouse at button-down (absolute threshold) */
@@ -647,8 +646,7 @@ static void prefs_load(void)
         if (sscanf(line, "chromeless=%d", &hm) == 1) g_chromeless = hm != 0;
         if (sscanf(line, "always_on_top=%d", &hm) == 1) g_always_on_top = hm != 0;
         if (sscanf(line, "one_file_recording=%d", &hm) == 1) g_rec_one_file = hm != 0;
-        if (sscanf(line, "controller_to_switch=%d", &hm) == 1) g_pad_send = hm != 0;
-        if (sscanf(line, "keyboard_to_switch=%d", &hm) == 1) g_pad_kbd = hm != 0;
+        pad_prefs_load(line);
         if (sscanf(line, "picture=%127s", v) == 1) pic_parse(v);
         if (sscanf(line, "window=%d,%d,%d,%d", &g_geom_x, &g_geom_y, &g_geom_w, &g_geom_h) == 4 &&
             g_geom_w >= 160 && g_geom_h >= 90) g_geom_valid = 1;
@@ -656,6 +654,17 @@ static void prefs_load(void)
         if (sscanf(line, "update_betas=%d", &hm) == 1) g_upd_betas = hm != 0;
         if (sscanf(line, "update_check=%d", &hm) == 1) g_upd_check = hm != 0;
     }
+    fclose(f);
+}
+
+/* --pad-test without --app: only the controller lines of viewer.ini, so a test can set the bindings */
+static void prefs_load_pad(void)
+{
+    char path[1024], line[256];
+    prefs_path(path, sizeof(path));
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    while (fgets(line, sizeof(line), f)) pad_prefs_load(line);
     fclose(f);
 }
 
@@ -728,7 +737,7 @@ static void prefs_save(void)
             g_pic.bright, g_pic.contrast, g_pic.sat, g_pic.gamma10, g_pic.sharp);
     fprintf(f, "fsr_sharpness=%d\n", g_fsr_sharpness);
     fprintf(f, "one_file_recording=%d\n", g_rec_one_file);
-    fprintf(f, "controller_to_switch=%d\nkeyboard_to_switch=%d\n", g_pad_send, g_pad_kbd);
+    pad_prefs_save(f);
     fprintf(f, "update_betas=%d\nupdate_check=%d\n", g_upd_betas, g_upd_check);
     if (g_geom_valid)
         fprintf(f, "window=%d,%d,%d,%d\nmaximized=%d\n", g_geom_x, g_geom_y, g_geom_w, g_geom_h, g_geom_maximized);
@@ -1484,6 +1493,8 @@ static void ren_swap(SDL_Window **winp, SDL_Renderer **renp, SDL_Texture **texp)
     g_ui_gear = NULL; g_ui_gear_ren = NULL;
     if (g_ui_pin) SDL_DestroyTexture(g_ui_pin);
     g_ui_pin = NULL; g_ui_pin_ren = NULL;
+    if (g_ui_pad) SDL_DestroyTexture(g_ui_pad);
+    g_ui_pad = NULL; g_ui_pad_ren = NULL;
     up_reset();
     SDL_DestroyRenderer(*renp);
     *renp = NULL;
@@ -1778,7 +1789,7 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
     }
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
-        pad_event(&e);                     /* v0.7.20: controllers come and go */
+        if (pad_event(&e) == 2) continue;  /* v0.7.20: controllers come and go; a key or button being bound; the mouse while the Switch has it */
         if (e.type == SDL_QUIT) {
             window_geom_capture(win);
             prefs_save();
@@ -1836,6 +1847,12 @@ static void app_events(SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
             if (g_menu) menu_draw(ren);
             else if (g_in_size_move || e.type != SDL_MOUSEMOTION)
                 viewer_repaint();
+            continue;
+        }
+        /* v0.7.20: with the mouse set to play the Switch, a click on the picture takes it (F10 lets go) */
+        if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT && !g_mouse_cap && !g_menu && !g_ui_open &&
+            !g_ip_editing && pad_mouse_ready()) {
+            pad_mouse_grab(1, "The Switch has the mouse - F10 lets go");
             continue;
         }
         if (e.type == SDL_MOUSEBUTTONDOWN && e.button.button == SDL_BUTTON_LEFT && e.button.clicks == 1 &&
@@ -2000,6 +2017,22 @@ static void app_title_cannot_open(SDL_Window *win, int err)
     snprintf(g_menu_err, sizeof(g_menu_err), "%s", libusb_error_name(err));
 }
 
+/* --settings / --padmenu (tests): the drawer open from the start */
+static float g_test_scroll = 0;
+static int g_test_ptr = 0;     /* --ptr (tests): the pointer counts as over the window, so the chrome paints */
+static void open_drawer_at_start(void)
+{
+    static int again;
+    if (g_test_ptr) g_ui_ptr_inside = 1;
+    if (g_open_settings) {
+        ui_open(1);
+        if (g_open_settings == 2) ui_page(1);
+        g_open_settings = 0;
+        again = g_test_scroll > 0 ? 6 : 0;
+    }
+    if (again > 0) { again--; g_ui_scroll = g_test_scroll; }
+}
+
 /* --app: open and claim the console, keeping the window alive meanwhile */
 static int app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, SDL_Texture *tex)
 {
@@ -2007,12 +2040,14 @@ static int app_wait_device(libusb_context *ctx, SDL_Window *win, SDL_Renderer *r
     int said = 0;
     g_menu = 1;
     g_menu_state = MENU_WAITING;
-    if (g_open_settings) { ui_open(1); g_open_settings = 0; }
+    open_drawer_at_start();
     for (int tick = 0;; tick++) {
         /* v0.5: the menu, redrawn often enough for the keys and the REC timer;
          * the bus is looked at every 250 ms as before */
         beat();
         app_events(win, ren, tex);
+        pad_poll(win, !g_ui_open && !g_ip_editing);   /* v0.7.20: the Controller page's preview works before a Switch is there */
+        g_pad_redraw = 0;                  /* this loop redraws the menu every pass */
         if (g_quit) { finder_stop(); return 0; }
         g_lost = 0;                        /* a Tab while waiting is not a disconnect */
         if (g_conn == CONN_NET) {
@@ -2212,6 +2247,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
     if (!win) {
         if (video_init() != 0) { fprintf(stderr, "SDL_Init: %s\n", SDL_GetError()); return 1; }
         pad_init();                        /* v0.7.20 */
+        if (g_pad_test) { prefs_load_pad(); pad_pick(); }
         SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_BT709);
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
         win = SDL_CreateWindow("Switch Frame Tap", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -2266,6 +2302,10 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
         beat();
         app_events(win, ren, tex);
         pad_poll(win, !g_ui_open && !g_ip_editing);   /* v0.7.20: the controller, when it changed */
+        if (g_pad_redraw) {                    /* the Controller page's strip or a new binding */
+            g_pad_redraw = 0;
+            if (g_menu) menu_draw(ren); else viewer_repaint();
+        }
         if (g_ren_swap) {                      /* v0.7.11: the upscaler wants the other renderer */
             ren_swap(&win, &ren, &tex);
             W = H = 0;
@@ -2385,6 +2425,7 @@ static int run_live(libusb_context *ctx, SDL_Window *win, SDL_Renderer *ren, int
                 hud_draw(ren, (int)W, (int)H, cs, rs[0] ? rs + 5 : "");
                 SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
             }
+            open_drawer_at_start();
             ui_overlay(ren, (int)W, (int)H);   /* v0.7.12: the Settings button and the drawer */
             SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
             if (g_shot && g_run_secs > 0 && (double)(SDL_GetPerformanceCounter() - t_start) / (double)freq >= g_run_secs - 1.0) {
@@ -2620,6 +2661,7 @@ static int run_check(const char *net_host)
 int main(int argc, char **argv)
 {
     int swap_rb = 0, scale = 1, headless = 0, low_latency = 1, threads = 2;   /* v0.7.11: one decode thread unless --threads */
+    pad_cfg_defaults();                    /* v0.7.20 */
     long max_frames = 0;
     int check = 0;
     const char *file = NULL, *record = NULL, *h264_out = NULL, *net_host = NULL;
@@ -2657,13 +2699,17 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--mp4") && i + 1 < argc) g_mp4 = argv[++i];
         else if (!strcmp(argv[i], "--rec-dir") && i + 1 < argc) g_rec_dir = argv[++i];
         else if (!strcmp(argv[i], "--net") && i + 1 < argc) net_host = argv[++i];
-        else if (!strcmp(argv[i], "--pad-test")) { g_pad_test = 1; g_pad_kbd = 1; }   /* v0.7.20: tests */
+        else if (!strcmp(argv[i], "--pad-test")) { g_pad_test = 1; g_pad_kbd = 1; g_pad_mouse = 1; }   /* v0.7.20: tests */
         else if (!strcmp(argv[i], "--no-aspect-lock")) g_lock_aspect_cli = 0;
         else if (!strcmp(argv[i], "--aspect-lock")) g_lock_aspect_cli = 1;
         else if (!strcmp(argv[i], "--chromeless")) g_chromeless_cli = 1;
         else if (!strcmp(argv[i], "--no-chromeless")) g_chromeless_cli = 0;
         else if (!strcmp(argv[i], "--update-check")) { prefs_load(); return upd_cli(argv, 0); }   /* v0.7.14 */
         else if (!strcmp(argv[i], "--settings")) g_open_settings = 1;   /* tests: the drawer open at start */
+        else if (!strcmp(argv[i], "--padmenu")) g_open_settings = 2;    /* tests: ...on the Controller page */
+        else if (!strncmp(argv[i], "--padtab=", 9)) g_pad_tab = atoi(argv[i] + 9) % 3;
+        else if (!strcmp(argv[i], "--ptr")) g_test_ptr = 1;
+        else if (!strncmp(argv[i], "--padscroll=", 12)) g_test_scroll = (float)atoi(argv[i] + 12);   /* tests: the page scrolled */
         else if (!strcmp(argv[i], "--update")) { prefs_load(); return upd_cli(argv, 1); }
         else if (!strcmp(argv[i], "--video-driver") && i + 1 < argc) g_video_driver = argv[++i];
         else if (!strcmp(argv[i], "--check") || !strcmp(argv[i], "--doctor")) check = 1;
@@ -2715,6 +2761,7 @@ int main(int argc, char **argv)
         SDL_SetYUVConversionMode(SDL_YUV_CONVERSION_BT709);
         SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
         prefs_load();                      /* v0.7: USB or network, the last address; v0.7.11: before the renderer */
+        pad_pick();                        /* v0.7.20: the controller the menu names */
         if (!headless && !file) upd_init(argv);   /* v0.7.14: where this viewer is, and (update_check) the start-up check */
         if (g_lock_aspect_cli >= 0) g_lock_aspect = g_lock_aspect_cli;
         up_pick_renderer();
