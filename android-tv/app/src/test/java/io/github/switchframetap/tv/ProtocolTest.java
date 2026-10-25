@@ -147,6 +147,24 @@ public final class ProtocolTest {
         check(pad.held(PadMath.PLUS | PadMath.MINUS) && pad.key(PadMath.MINUS, false) && !pad.held(PadMath.PLUS | PadMath.MINUS), "the + and - chord");
         pad.reset();
         check(pad.idle() && pad.message(true, true)[8] == 0, "reset lets go of everything");
+        // v0.7.20-beta3: the Controller menu - names, a tunable dead zone and press point, the test box text
+        check(PadMath.names(0).isEmpty() && PadMath.names(PadMath.A | PadMath.ZL | PadMath.UP).equals("A ZL Up"), "button names");
+        check(PadMath.REMAP.length == 14 && PadMath.REMAP_NAMES.length == 14 && PadMath.REMAP[0] == PadMath.A
+              && PadMath.REMAP[13] == PadMath.CAPTURE && PadMath.REMAP_NAMES[8].equals("Left stick click"), "the remap table");
+        PadMath.stick(0.15, 0, s, 0, 0.20); check(s[0] == 0, "a wider dead zone ignores a 15% tilt");
+        PadMath.stick(0.15, 0, s, 0, 0.0);  check(s[0] > 0, "no dead zone passes it");
+        PadMath.stick(1, 0, s, 0, 0.30);    check(s[0] == 32767, "full tilt is still full with a wide dead zone");
+        check(PadMath.pressed(0.6, 0.5) && !PadMath.pressed(0.4, 0.5) && PadMath.pressed(0.31) == PadMath.pressed(0.31, 0.30), "press point");
+        PadMath.State tuned = new PadMath.State();
+        tuned.tune(0.25, 0.60);
+        check(!tuned.sticks(0.2, 0, 0, 0) && tuned.sticks(0.5, 0, 0, 0), "a state's dead zone follows tune");
+        check(!tuned.triggers(0.5, 0) && tuned.triggers(0.7, 0) && tuned.held(0) && tuned.describe().contains("ZL"), "a state's press point follows tune");
+        PadMath.State fresh = new PadMath.State();
+        check(fresh.describe().equals("Buttons: none\nLeft stick: 0, 0   Right stick: 0, 0"), "describe: nothing pressed");
+        fresh.key(PadMath.B, true); fresh.sticks(1, 0, 0, 0);
+        check(fresh.describe().equals("Buttons: B\nLeft stick: 32767, 0   Right stick: 0, 0"), "describe: a button and a stick");
+        tuned.tune(9, 9); tuned.triggers(0, 0); fresh.tune(-1, -5);
+        check(!fresh.triggers(0.04, 0) && fresh.triggers(0.06, 0) && !tuned.triggers(0.94, 0) && tuned.triggers(0.96, 0), "tune clamps the press point");
         // v0.7.16 recordings: an MP4 sample is the picture NAL units only
         byte[] picOnly = SftProtocol.pictureNals(new byte[]{0,0,0,1,0x09,0x10, 0,0,0,1,0x67,0x64,0, 0,0,1,0x68,0x12, 0,0,1,0x06,5,5, 0,0,1,0x65,9,8, 0,0,0,1,0x41,7});
         check(Arrays.equals(picOnly, new byte[]{0,0,0,1,0x65,9,8, 0,0,0,1,0x41,7}), "AUD, SPS, PPS and SEI left out of a sample");

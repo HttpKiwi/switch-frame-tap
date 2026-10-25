@@ -164,5 +164,30 @@ final class Ui {
         @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
     }
 
+    /** The Controller menu's icon: a game pad, with a cross and two buttons cut out of it. */
+    static final class PadIcon extends Drawable {
+        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final Path shape = new Path();
+        PadIcon(int color) { paint.setColor(color); shape.setFillType(Path.FillType.EVEN_ODD); }
+        @Override public void draw(Canvas canvas) {
+            android.graphics.Rect b = getBounds();
+            float cx = b.exactCenterX(), cy = b.exactCenterY(), s = Math.min(b.width(), b.height()) / 2f;
+            shape.reset();
+            shape.addRoundRect(cx - s, cy - 0.58f * s, cx + s, cy + 0.58f * s, 0.52f * s, 0.52f * s, Path.Direction.CW);
+            final float px = cx - 0.5f * s, py = cy, a = 0.30f * s, w = 0.10f * s;
+            shape.moveTo(px - w, py - a); shape.lineTo(px + w, py - a); shape.lineTo(px + w, py - w);
+            shape.lineTo(px + a, py - w); shape.lineTo(px + a, py + w); shape.lineTo(px + w, py + w);
+            shape.lineTo(px + w, py + a); shape.lineTo(px - w, py + a); shape.lineTo(px - w, py + w);
+            shape.lineTo(px - a, py + w); shape.lineTo(px - a, py - w); shape.lineTo(px - w, py - w);
+            shape.close();
+            shape.addCircle(cx + 0.36f * s, cy + 0.12f * s, 0.14f * s, Path.Direction.CW);
+            shape.addCircle(cx + 0.64f * s, cy - 0.12f * s, 0.14f * s, Path.Direction.CW);
+            canvas.drawPath(shape, paint);
+        }
+        @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); }
+        @Override public void setColorFilter(ColorFilter filter) { paint.setColorFilter(filter); }
+        @Override public int getOpacity() { return PixelFormat.TRANSLUCENT; }
+    }
+
     private Ui() { }
 }

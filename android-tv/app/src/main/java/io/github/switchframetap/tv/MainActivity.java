@@ -72,8 +72,14 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     private boolean mute, stable, stats;
     private volatile StreamEngine engine;
     private PadInput pad;                          // v0.7.20-beta2: a controller on this device plays the Switch
-    private TextView padStatus;
-    private String padShown = "";
+    private TextView padStatus, padTest, drawerTitle;
+    private String padShown = "", testShown = "";
+    private ScrollView settingsScroll, padScroll;
+    private Button drawerClose, drawerPad, padButton;
+    private View padFirst;
+    private boolean padPage, padFromSettings;     // the drawer shows the Controller page (and was entered from Settings)
+    private int capturing = -1, padDead = 8, padTrigger = 30;
+    private final TextView[] mapValue = new TextView[PadMath.REMAP.length];
     private String message = "";
     private int consoleReason;
     private String consoleHead = "", consoleDetail = "";
@@ -108,10 +114,13 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         requested = prefs.getBoolean("auto", false);   // connect again if it was connected last time
         pad = new PadInput(this, handler, new PadInput.Host() {
             @Override public StreamEngine engine() { return engine; }
-            @Override public void openSettings() { handler.post(MainActivity.this::openDrawer); }
+            @Override public void openSettings() { handler.post(() -> openDrawer()); }
         });
         pad.enable(prefs.getBoolean("pad", true));
         pad.labels(prefs.getBoolean("pad_labels", false));
+        pad.mapping(prefs.getString("pad_map", ""));
+        padDead = prefs.getInt("pad_dead", 8); padTrigger = prefs.getInt("pad_trigger", 30);
+        pad.tune(padDead, padTrigger);
         UiModeManager mode = (UiModeManager)getSystemService(UI_MODE_SERVICE);
         tv = mode != null && mode.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION;
         audioManager = (AudioManager)getSystemService(AUDIO_SERVICE);
@@ -181,6 +190,10 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         FrameLayout.LayoutParams gl = new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.TOP | Gravity.END);
         gl.setMargins(0, dp(18), dp(32), 0);
         home.addView(settingsButton, gl);
+        padButton = iconButton(new Ui.PadIcon(Ui.INK), 8, "Controller", v -> openDrawer(true));
+        FrameLayout.LayoutParams pl = new FrameLayout.LayoutParams(dp(40), dp(40), Gravity.TOP | Gravity.END);
+        pl.setMargins(0, dp(18), dp(32 + 40 + 10), 0);
+        home.addView(padButton, pl);
 
         LinearLayout column = new LinearLayout(this);
         column.setOrientation(LinearLayout.VERTICAL); column.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -261,17 +274,22 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
 
         LinearLayout head = new LinearLayout(this); head.setGravity(Gravity.CENTER_VERTICAL);
         head.setPadding(dp(26), dp(20), dp(20), dp(14));
-        head.addView(Ui.text(this, "Settings", 25, Ui.INK, true), new LinearLayout.LayoutParams(0, -2, 1));
-        head.addView(Ui.pill(this, "Close", false, v -> closeDrawer()), new LinearLayout.LayoutParams(-2, dp(40)));
+        drawerTitle = Ui.text(this, "Settings", 25, Ui.INK, true);
+        head.addView(drawerTitle, new LinearLayout.LayoutParams(0, -2, 1));
+        LinearLayout.LayoutParams dpl = new LinearLayout.LayoutParams(dp(40), dp(40)); dpl.rightMargin = dp(10);
+        drawerPad = iconButton(new Ui.PadIcon(Ui.INK), 8, "Controller", v -> showPage(true, true));
+        head.addView(drawerPad, dpl);
+        drawerClose = Ui.pill(this, "Close", false, v -> leaveDrawer());
+        head.addView(drawerClose, new LinearLayout.LayoutParams(-2, dp(40)));
         column.addView(head);
         View line = new View(this); line.setBackgroundColor(0x14FFFFFF);
         column.addView(line, new LinearLayout.LayoutParams(-1, 1));
 
-        ScrollView scroll = new ScrollView(this);
-        column.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        settingsScroll = new ScrollView(this);
+        column.addView(settingsScroll, new LinearLayout.LayoutParams(-1, 0, 1));
         LinearLayout body = new LinearLayout(this); body.setOrientation(LinearLayout.VERTICAL);
         body.setPadding(dp(14), dp(6), dp(14), dp(16));
-        scroll.addView(body, new ScrollView.LayoutParams(-1, -2));
+        settingsScroll.addView(body, new ScrollView.LayoutParams(-1, -2));
 
         section(body, "CAPTURE");
         actionRow(body, "Screenshot", "A PNG in Pictures/" + Capture.FOLDER + (tv ? " · P key" : ""), v -> { closeDrawer(); handler.postDelayed(this::screenshot, 250); });
@@ -311,18 +329,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         body.addView(ipLabel);
 
         section(body, "CONTROLLER");
-        toggleRow(body, "Play with a controller", "A controller connected to this device plays the Switch", prefs.getBoolean("pad", true), value -> {
-            prefs.edit().putBoolean("pad", value).apply();
-            pad.enable(value); padSync(); showPadStatus();
-        });
-        toggleRow(body, "Match the button labels", "A, B, X, Y as printed on the controller. Off: by position, like the Switch (the bottom button is B)",
-                prefs.getBoolean("pad_labels", false), value -> {
-            prefs.edit().putBoolean("pad_labels", value).apply();
-            pad.labels(value);
-        });
-        padStatus = Ui.text(this, "", 13, Ui.DIM, false); padStatus.setPadding(dp(12), dp(4), dp(12), dp(8));
-        padStatus.setLineSpacing(dp(3), 1);
-        body.addView(padStatus);
+        actionRow(body, "Controller menu", "Remap buttons, test the controller, dead zones", v -> showPage(true, true));
 
         section(body, "SOUND");
         muteToggle = toggleRow(body, "Mute", "This device only - the Switch keeps its own sound", mute, value -> {
@@ -369,6 +376,8 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
                 + "Your controller stays connected to the Switch. Quality and resolution are chosen on the console.", 13, Ui.DIM, false);
         about.setLineSpacing(dp(4), 1); about.setPadding(dp(12), dp(4), dp(12), dp(8));
         body.addView(about);
+
+        buildPadPage(column);
 
         if (tv) {
             View line2 = new View(this); line2.setBackgroundColor(0x14FFFFFF);
@@ -538,14 +547,22 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         }
     }
 
-    private void openDrawer() {
+    private void openDrawer() { openDrawer(false); }
+    /** The drawer, on the Settings page or on the Controller page. */
+    private void openDrawer(boolean controller) {
         if (drawer.getVisibility() == View.VISIBLE) return;
         scrim.setVisibility(View.VISIBLE); drawer.setVisibility(View.VISIBLE);
-        (usbMode ? drawerUsb : drawerNet).requestFocus();
+        showPage(controller, false);
         showPadStatus(); padSync();
+    }
+    /** Back (the Controller page was opened from Settings) or Close. */
+    private void leaveDrawer() {
+        if (padPage && padFromSettings) showPage(false, false);
+        else closeDrawer();
     }
     private void closeDrawer() {
         if (drawer.getVisibility() != View.VISIBLE) return;
+        stopListening(); handler.removeCallbacks(padTick);
         scrim.setVisibility(View.GONE); drawer.setVisibility(View.GONE);
         prefs.edit().putString("ip", ip.getText().toString().trim()).apply();
         InputMethodManager keyboard = (InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
@@ -749,7 +766,167 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     private void padSync() {
         if (pad == null || drawer == null) return;
         pad.playing(resumed && !drawerOpen() && hasWindowFocus());
+        pad.probing(resumed && drawerOpen() && padPage);
         pad.sync();
+    }
+    /* ---- the Controller page ------------------------------------------------ */
+
+    private Button iconButton(android.graphics.drawable.Drawable icon, int insetDp, String description, View.OnClickListener click) {
+        Button b = new Button(this);
+        b.setContentDescription(description);
+        b.setStateListAnimator(null);
+        android.graphics.drawable.LayerDrawable layers = new android.graphics.drawable.LayerDrawable(
+                new android.graphics.drawable.Drawable[]{ Ui.states(Ui.SURF2, Ui.SURF3, 20), icon });
+        layers.setLayerInset(1, dp(insetDp), dp(insetDp), dp(insetDp), dp(insetDp));
+        b.setBackground(layers);
+        b.setOnClickListener(click);
+        return b;
+    }
+    /** Settings page or Controller page, and what the head says. */
+    private void showPage(boolean controller, boolean fromSettings) {
+        stopListening();
+        padPage = controller; padFromSettings = controller && fromSettings;
+        drawerTitle.setText(controller ? "Controller" : "Settings");
+        drawerClose.setText(padFromSettings ? "Back" : "Close");
+        drawerPad.setVisibility(controller ? View.GONE : View.VISIBLE);
+        settingsScroll.setVisibility(controller ? View.GONE : View.VISIBLE);
+        padScroll.setVisibility(controller ? View.VISIBLE : View.GONE);
+        handler.removeCallbacks(padTick);
+        if (controller) {
+            padScroll.scrollTo(0, 0);
+            refreshMap(); showPadStatus();
+            padFirst.requestFocus();
+            handler.post(padTick);
+        } else {
+            settingsScroll.scrollTo(0, 0);
+            (usbMode ? drawerUsb : drawerNet).requestFocus();
+        }
+        padSync();
+    }
+    /** The test box, ten times a second while the Controller page is open (nothing runs otherwise). */
+    private final Runnable padTick = new Runnable() {
+        @Override public void run() {
+            if (!drawerOpen() || !padPage) return;
+            showPadStatus();
+            String now = pad.pressing();
+            if (!now.equals(testShown)) { testShown = now; padTest.setText(now); }
+            handler.postDelayed(this, 100);
+        }
+    };
+    private void buildPadPage(LinearLayout column) {
+        padScroll = new ScrollView(this); padScroll.setVisibility(View.GONE);
+        column.addView(padScroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        LinearLayout body = new LinearLayout(this); body.setOrientation(LinearLayout.VERTICAL);
+        body.setPadding(dp(14), dp(6), dp(14), dp(16));
+        padScroll.addView(body, new ScrollView.LayoutParams(-1, -2));
+
+        padStatus = Ui.text(this, "", 13, Ui.DIM, false); padStatus.setPadding(dp(12), dp(10), dp(12), dp(4));
+        padStatus.setLineSpacing(dp(3), 1);
+        body.addView(padStatus);
+
+        section(body, "PLAY");
+        Ui.Toggle first = toggleRow(body, "Play with a controller", "A controller connected to this device plays the Switch", prefs.getBoolean("pad", true), value -> {
+            prefs.edit().putBoolean("pad", value).apply();
+            pad.enable(value); padSync(); showPadStatus();
+        });
+        padFirst = (View)first.getParent();
+        toggleRow(body, "Match the button labels", "A, B, X, Y as printed on the controller. Off: by position, like the Switch (the bottom button is B)",
+                prefs.getBoolean("pad_labels", false), value -> {
+            prefs.edit().putBoolean("pad_labels", value).apply();
+            pad.labels(value); refreshMap();
+        });
+
+        section(body, "TEST");
+        TextView hint = Ui.text(this, "Press a button or move a stick: this is what the Switch is sent.", 13, Ui.DIM, false);
+        hint.setPadding(dp(12), 0, dp(12), dp(8)); body.addView(hint);
+        padTest = Ui.text(this, "", 14, Ui.INK, false);
+        padTest.setLineSpacing(dp(4), 1); padTest.setPadding(dp(14), dp(10), dp(14), dp(10));
+        padTest.setBackground(Ui.round(Ui.SURF2, 10));
+        LinearLayout.LayoutParams tl = new LinearLayout.LayoutParams(-1, -2); tl.leftMargin = tl.rightMargin = dp(12);
+        body.addView(padTest, tl);
+
+        section(body, "BUTTONS");
+        TextView how = Ui.text(this, "Choose a Switch button, then press the button on your controller that should be it. "
+                + "Press it again, or wait, to cancel. The D-pad and the sticks are fixed.", 13, Ui.DIM, false);
+        how.setLineSpacing(dp(3), 1); how.setPadding(dp(12), 0, dp(12), dp(6)); body.addView(how);
+        for (int i = 0; i < PadMath.REMAP.length; i++) mapRow(body, i);
+        actionRow(body, "Reset to defaults", "Every button back to its own place", v -> {
+            stopListening(); pad.resetMap(); saveMap(); refreshMap();
+        });
+
+        section(body, "STICKS AND TRIGGERS");
+        stepperRow(body, "Stick dead zone", "Ignore small movements. Raise it if the picture drifts on its own", 0, 30, 2, padDead, value -> {
+            padDead = value; prefs.edit().putInt("pad_dead", value).apply(); pad.tune(padDead, padTrigger);
+        });
+        stepperRow(body, "Trigger press point", "How far ZL and ZR go down before the Switch sees a press", 10, 90, 5, padTrigger, value -> {
+            padTrigger = value; prefs.edit().putInt("pad_trigger", value).apply(); pad.tune(padDead, padTrigger);
+        });
+    }
+    private void mapRow(LinearLayout body, int i) {
+        LinearLayout row = new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(7), dp(12), dp(7));
+        row.setFocusable(true); row.setClickable(true); row.setBackground(Ui.rowBackground());
+        row.addView(Ui.text(this, PadMath.REMAP_NAMES[i], 16, Ui.INK, false), new LinearLayout.LayoutParams(0, -2, 1));
+        TextView value = Ui.text(this, "", 14, Ui.INK, true);
+        value.setPadding(dp(14), dp(7), dp(14), dp(7)); value.setBackground(Ui.round(Ui.SURF3, 8));
+        value.setGravity(Gravity.CENTER);
+        row.addView(value, new LinearLayout.LayoutParams(-2, -2));
+        mapValue[i] = value;
+        row.setOnClickListener(v -> listenFor(i));
+        body.addView(row);
+    }
+    private interface OnStep { void changed(int value); }
+    /** A number in steps, with minus and plus buttons. */
+    private void stepperRow(LinearLayout body, String label, String sub, int min, int max, int step, int value, OnStep changed) {
+        LinearLayout row = new LinearLayout(this); row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(12), dp(8), dp(12), dp(8));
+        LinearLayout texts = new LinearLayout(this); texts.setOrientation(LinearLayout.VERTICAL);
+        texts.addView(Ui.text(this, label, 16, Ui.INK, false));
+        TextView s = Ui.text(this, sub, 13, Ui.DIM, false); s.setPadding(0, dp(5), 0, 0);
+        texts.addView(s);
+        row.addView(texts, new LinearLayout.LayoutParams(0, -2, 1));
+        final TextView number = Ui.text(this, value + "%", 15, Ui.INK, true);
+        number.setGravity(Gravity.CENTER);
+        final int[] now = { value };
+        Button minus = Ui.pill(this, "\u2212", false, v -> {
+            now[0] = Math.max(min, now[0] - step); number.setText(now[0] + "%"); changed.changed(now[0]);
+        });
+        Button plus = Ui.pill(this, "+", false, v -> {
+            now[0] = Math.min(max, now[0] + step); number.setText(now[0] + "%"); changed.changed(now[0]);
+        });
+        minus.setPadding(0, 0, 0, 0); plus.setPadding(0, 0, 0, 0);
+        LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(dp(40), dp(38)); bl.leftMargin = dp(8);
+        row.addView(minus, bl);
+        row.addView(number, new LinearLayout.LayoutParams(dp(52), -2));
+        row.addView(plus, new LinearLayout.LayoutParams(dp(40), dp(38)));
+        body.addView(row);
+    }
+    private final Runnable captureTimeout = this::stopListening;
+    /** Wait for the controller button that Switch button i should take. */
+    private void listenFor(int i) {
+        if (capturing == i) { stopListening(); return; }
+        stopListening();
+        capturing = i;
+        pad.listen(code -> {
+            capturing = -1; handler.removeCallbacks(captureTimeout);
+            pad.assign(i, code); saveMap(); refreshMap();
+        });
+        handler.postDelayed(captureTimeout, 8000);
+        refreshMap();
+    }
+    private void stopListening() {
+        handler.removeCallbacks(captureTimeout);
+        if (capturing < 0 && !pad.listening()) return;
+        capturing = -1; pad.listen(null);
+        refreshMap();
+    }
+    private void saveMap() { prefs.edit().putString("pad_map", pad.mapping()).apply(); }
+    private void refreshMap() {
+        for (int i = 0; i < mapValue.length; i++) {
+            final boolean waiting = capturing == i;
+            mapValue[i].setText(waiting ? "Press a button" : PadInput.keyName(pad.key(i)));
+            mapValue[i].setTextColor(waiting ? Ui.ACC : Ui.INK);
+        }
     }
     private void showPadStatus() {
         if (padStatus == null || pad == null) return;
@@ -759,7 +936,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
 
     @Override public boolean onKeyDown(int code, KeyEvent event) {
         if (drawerOpen() && event.getRepeatCount() == 0) {   // a controller in the menu: A selects, B closes
-            if (code == KeyEvent.KEYCODE_BUTTON_B) { closeDrawer(); return true; }
+            if (code == KeyEvent.KEYCODE_BUTTON_B) { leaveDrawer(); return true; }
             View focused = getCurrentFocus();
             if (code == KeyEvent.KEYCODE_BUTTON_A && focused != null && focused.isClickable()) { focused.performClick(); return true; }
         }
@@ -777,7 +954,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         return super.onKeyDown(code, event);
     }
     @Override public void onBackPressed() {
-        if (drawerOpen()) closeDrawer();
+        if (drawerOpen()) leaveDrawer();
         else if (showingVideo) openDrawer();
         else { stopEngine(); super.onBackPressed(); }
     }
