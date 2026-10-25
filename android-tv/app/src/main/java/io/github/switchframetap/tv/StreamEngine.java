@@ -41,6 +41,8 @@ final class StreamEngine {
     private volatile boolean keyWanted;       // ... which starts at a keyframe asked for now
     private volatile boolean unlockWanted;    // v0.7.18: recording ended - the console may change size again
     private volatile boolean oneFile;         // v0.7.19: "One file per recording" (Settings) - the size lock is a choice
+    private volatile boolean inputOn;         // v0.7.20: the console takes a controller from us (flag 128 on its headers)
+    private final SftProtocol.InputFlag inputFlag = on -> { if (inputOn != on) inputOn = on; };
     private final Thread thread;
     StreamEngine(Context context, Surface surface, boolean usb, String address, String lastAddress,
                  boolean stableAudio, boolean muted, Listener listener) {
@@ -56,6 +58,13 @@ final class StreamEngine {
     void record(Recorder r) { recorder = r; keyWanted = true; }
     /** v0.7.19: while recording, ask the console to keep one picture size (off: a new file when it changes). */
     void oneFileRecording(boolean value) { oneFile = value; if (recorder != null) keyWanted = true; }
+    /** v0.7.20-beta2: the console asked for a controller on this connection. */
+    boolean consoleTakesInput() { return inputOn && source != null; }
+    /** A controller message ("SFTI"), sent from the pad's own thread. False: it did not go. */
+    boolean sendInput(byte[] message) {
+        SftProtocol.Source s = source;
+        return s != null && s.request(message);
+    }
     /** Ends the recording (it finishes the file on its own thread). */
     void stopRecording() {
         Recorder r = recorder; recorder = null;
@@ -108,7 +117,7 @@ final class StreamEngine {
                             else { tries = 0; retryAtNs = 0; }
                             keyAskedNs = System.nanoTime();
                         }
-                        SftProtocol.Packet packet = SftProtocol.readPacket(connected, () -> stopped);
+                        SftProtocol.Packet packet = SftProtocol.readPacket(connected, () -> stopped, inputFlag);
                         stats.bytes += packet.data.length + 32;
                         Recorder r = recorder;
                         if (r != null && !packet.status()) r.offer(packet);
@@ -137,7 +146,7 @@ final class StreamEngine {
                     }
                 } finally {
                     stopRecording();   // a new connection is a new stream: the file ends here
-                    closeSource(); source = null;
+                    closeSource(); source = null; inputOn = false;
                     // Cleanup must finish even when stop() interrupted the receiver.
                     Thread.interrupted();
                     if (video != null) video.close();

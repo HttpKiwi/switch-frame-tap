@@ -821,11 +821,13 @@ namespace {
                     "Not for homebrew opened from the Album: there it has too little memory for 1080p."));
                 /* v0.7.20 */
                 p.rows.push_back(Section("Right away"));
-                p.rows.push_back(Toggle("Controls from the PC viewer", [this] { return set.viewer_input; },
+                p.rows.push_back(Toggle("Controls from the viewer", [this] { return set.viewer_input; },
                     [this](int) { set.viewer_input = !set.viewer_input; Saved(); },
-                    "A controller, the keyboard or the mouse of the PC play the Switch through the PC viewer: they show up here as one more "
-                    "Pro Controller while the viewer is open, over USB or the network, in games and the HOME menu. "
-                    "Which of them play, and what each key does, is set in the viewer's Controller menu (top left, or G). "
+                    "A controller, the keyboard or the mouse of the PC play the Switch through the PC viewer, and a controller on the "
+                    "phone or TV through the Android app: they show up here as one more Pro Controller while the viewer is open, "
+                    "over USB or the network, in games and the HOME menu. "
+                    "Which of them play, and what each key does, is set in the viewer's Controller menu (top left, or G) "
+                    "and in the Android app's Settings. "
                     "If a game only listens to one controller, pick it in Controllers > Change Grip/Order. "
                     "The viewer needs version 0.7.20 or later."));
                 pages.push_back(std::move(p));

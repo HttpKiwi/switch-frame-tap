@@ -15,11 +15,14 @@ final class SftProtocol {
      *  another viewer never drops the connection. */
     static final int CROP = 32, CROP_MID = 64;
     /** v0.7.20 consoles with "Controls from the PC viewer" on set this on every header
-     *  but plain audio: they take a controller from the viewer. This app sends none
-     *  (yet), so the bit is dropped on read and never reaches the format checks. */
+     *  but plain audio: they take a controller from the viewer. The bit is dropped on
+     *  read and never reaches the format checks; readPacket reports it to an InputFlag. */
     static final int INPUT = 128;
     static final int MAX_VIDEO = 8 * 1024 * 1024, MAX_AUDIO = 65536, MAX_STATUS = 4096;
     interface Stop { boolean stopped(); }
+    /** v0.7.20: whether the console takes a controller from this viewer, said by
+     *  every header but plain audio (the PC viewer reads it the same way). */
+    interface InputFlag { void seen(boolean takes); }
     interface Source extends AutoCloseable {
         /** Returns 0 on an idle timeout, -1 on EOF. Never discard partial reads. */
         int read(byte[] data, int offset, int length) throws IOException;
@@ -55,7 +58,8 @@ final class SftProtocol {
         String statusHead() { return cString(data, 8, 64); }
         String statusDetail() { return cString(data, 72, 120); }
     }
-    static Packet readPacket(Source source, Stop stopped) throws IOException {
+    static Packet readPacket(Source source, Stop stopped) throws IOException { return readPacket(source, stopped, null); }
+    static Packet readPacket(Source source, Stop stopped, InputFlag input) throws IOException {
         byte[] h = new byte[32];
         int flags;
         long w, height, n, receivedNs;
@@ -64,7 +68,9 @@ final class SftProtocol {
             receivedNs = System.nanoTime();
             if (u32(h, 0) != 0x52544653L) throw new IOException("Invalid SFTR header");
             if (u16(h, 4) != 2) throw new IOException("SFTR protocol v2 is required");
-            flags = u16(h, 6) & ~INPUT;
+            int raw = u16(h, 6);
+            flags = raw & ~INPUT;
+            if (input != null && ((raw & AUDIO) == 0 || (raw & STATUS) != 0)) input.seen((raw & INPUT) != 0);
             w = u32(h, 8); height = u32(h, 12); n = u32(h, 20);
             // An empty header is the console checking that a viewer reads (USB): nothing follows.
             if (flags == 0 && n == 0) continue;
@@ -104,6 +110,20 @@ final class SftProtocol {
                 done += n;
             }
         }
+    }
+    /** "SFTI", 32 bytes, little-endian: flags (1 = a controller is here, 0 = let go),
+     *  the buttons as HidNpadButton bits, then the sticks (left x, y, right x, y) in
+     *  -32767..32767 with up = +y. The PC viewer sends the same (tools/raw-recv/pad.h). */
+    static byte[] inputMessage(boolean controller, long buttons, int lx, int ly, int rx, int ry) {
+        byte[] m = new byte[32];
+        m[0] = 'S'; m[1] = 'F'; m[2] = 'T'; m[3] = 'I';
+        put32(m, 4, controller ? 1 : 0);
+        put32(m, 8, (int)buttons); put32(m, 12, (int)(buttons >>> 32));
+        put32(m, 16, lx); put32(m, 20, ly); put32(m, 24, rx); put32(m, 28, ry);
+        return m;
+    }
+    private static void put32(byte[] b, int i, int v) {
+        b[i] = (byte)v; b[i+1] = (byte)(v >> 8); b[i+2] = (byte)(v >> 16); b[i+3] = (byte)(v >> 24);
     }
     static String cString(byte[] b, int offset, int max) {
         int end = offset;

@@ -28,7 +28,7 @@ final class Transports {
             try { return input.read(data, offset, length); }
             catch (SocketTimeoutException e) { return 0; }
         }
-        @Override public boolean request(byte[] message) {
+        @Override public synchronized boolean request(byte[] message) {   // the receiver and the pad both write
             try { socket.getOutputStream().write(message); return true; } catch (IOException e) { return false; }
         }
         @Override public void close() throws IOException { socket.close(); }
@@ -82,7 +82,7 @@ final class Transports {
             }
             return n;
         }
-        @Override public boolean request(byte[] message) {
+        @Override public synchronized boolean request(byte[] message) {
             UsbEndpoint ep = out;
             if (closed || ep == null) return true;   // nothing to ask with: not a retry case
             return connection.bulkTransfer(ep, message, message.length, 20) == message.length;

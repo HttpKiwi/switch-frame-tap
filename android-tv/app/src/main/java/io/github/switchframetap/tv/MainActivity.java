@@ -24,6 +24,7 @@ import android.os.Looper;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.KeyEvent;
+import android.view.MotionEvent;
 import android.view.PixelCopy;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -69,7 +70,10 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
     private LinearLayout ipRow;
     private boolean usbMode, resumed, surfaceReady, requested, tv, showingVideo;
     private boolean mute, stable, stats;
-    private StreamEngine engine;
+    private volatile StreamEngine engine;
+    private PadInput pad;                          // v0.7.20-beta2: a controller on this device plays the Switch
+    private TextView padStatus;
+    private String padShown = "";
     private String message = "";
     private int consoleReason;
     private String consoleHead = "", consoleDetail = "";
@@ -102,6 +106,12 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         stable = prefs.getBoolean("stable_audio", false);
         stats = prefs.getBoolean("stats", false);
         requested = prefs.getBoolean("auto", false);   // connect again if it was connected last time
+        pad = new PadInput(this, handler, new PadInput.Host() {
+            @Override public StreamEngine engine() { return engine; }
+            @Override public void openSettings() { handler.post(MainActivity.this::openDrawer); }
+        });
+        pad.enable(prefs.getBoolean("pad", true));
+        pad.labels(prefs.getBoolean("pad_labels", false));
         UiModeManager mode = (UiModeManager)getSystemService(UI_MODE_SERVICE);
         tv = mode != null && mode.getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION;
         audioManager = (AudioManager)getSystemService(AUDIO_SERVICE);
@@ -299,6 +309,20 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         ipLabel = Ui.text(this, "", 13, Ui.DIM, false); ipLabel.setPadding(dp(12), dp(6), dp(12), dp(6));
         ipLabel.setLineSpacing(dp(3), 1);
         body.addView(ipLabel);
+
+        section(body, "CONTROLLER");
+        toggleRow(body, "Play with a controller", "A controller connected to this device plays the Switch", prefs.getBoolean("pad", true), value -> {
+            prefs.edit().putBoolean("pad", value).apply();
+            pad.enable(value); padSync(); showPadStatus();
+        });
+        toggleRow(body, "Match the button labels", "A, B, X, Y as printed on the controller. Off: by position, like the Switch (the bottom button is B)",
+                prefs.getBoolean("pad_labels", false), value -> {
+            prefs.edit().putBoolean("pad_labels", value).apply();
+            pad.labels(value);
+        });
+        padStatus = Ui.text(this, "", 13, Ui.DIM, false); padStatus.setPadding(dp(12), dp(4), dp(12), dp(8));
+        padStatus.setLineSpacing(dp(3), 1);
+        body.addView(padStatus);
 
         section(body, "SOUND");
         muteToggle = toggleRow(body, "Mute", "This device only - the Switch keeps its own sound", mute, value -> {
@@ -518,6 +542,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         if (drawer.getVisibility() == View.VISIBLE) return;
         scrim.setVisibility(View.VISIBLE); drawer.setVisibility(View.VISIBLE);
         (usbMode ? drawerUsb : drawerNet).requestFocus();
+        showPadStatus(); padSync();
     }
     private void closeDrawer() {
         if (drawer.getVisibility() != View.VISIBLE) return;
@@ -527,6 +552,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         if (keyboard != null) keyboard.hideSoftInputFromWindow(ip.getWindowToken(), 0);
         updateHome();
         if (home.getVisibility() == View.VISIBLE) action.requestFocus();
+        padSync();
     }
     private boolean drawerOpen() { return drawer.getVisibility() == View.VISIBLE; }
 
@@ -612,6 +638,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         sampledBytes = sampledFrames = sampledReceived = sampledDecoded = sampledAudio = 0;
         consoleReason = 0; consoleAt = 0;
         setMessage(""); engine.start(); updateHome();
+        padSync();
     }
     private void stopEngine() {
         StreamEngine old = engine; engine = null;
@@ -692,6 +719,7 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
                 if (recorder != null) updateRecording();
                 if (!active) updateHome();   // a console status ages out after 4 s
             }
+            if (drawerOpen()) showPadStatus();
             handler.postDelayed(this, 250);
         }
     };
@@ -708,7 +736,33 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
 
     /* ---- keys and lifecycle ------------------------------------------------- */
 
+    /** v0.7.20-beta2: a controller's buttons and sticks go to the console while this screen is in front and
+     *  Settings is closed (and the console asked for one, picture or not); otherwise they stay with the app. */
+    @Override public boolean dispatchKeyEvent(KeyEvent event) {
+        if (pad != null && pad.key(event)) return true;
+        return super.dispatchKeyEvent(event);
+    }
+    @Override public boolean dispatchGenericMotionEvent(MotionEvent event) {
+        if (pad != null && pad.motion(event)) return true;
+        return super.dispatchGenericMotionEvent(event);
+    }
+    private void padSync() {
+        if (pad == null || drawer == null) return;
+        pad.playing(resumed && !drawerOpen() && hasWindowFocus());
+        pad.sync();
+    }
+    private void showPadStatus() {
+        if (padStatus == null || pad == null) return;
+        String now = pad.status();
+        if (!now.equals(padShown)) { padShown = now; padStatus.setText(now); }
+    }
+
     @Override public boolean onKeyDown(int code, KeyEvent event) {
+        if (drawerOpen() && event.getRepeatCount() == 0) {   // a controller in the menu: A selects, B closes
+            if (code == KeyEvent.KEYCODE_BUTTON_B) { closeDrawer(); return true; }
+            View focused = getCurrentFocus();
+            if (code == KeyEvent.KEYCODE_BUTTON_A && focused != null && focused.isClickable()) { focused.performClick(); return true; }
+        }
         if (event.getRepeatCount() == 0 && !drawerOpen() && showingVideo) {
             // v0.7.16: a keyboard or a remote with a record key
             if (code == KeyEvent.KEYCODE_MEDIA_RECORD || code == KeyEvent.KEYCODE_R) { toggleRecording(); return true; }
@@ -727,13 +781,13 @@ public final class MainActivity extends Activity implements SurfaceHolder.Callba
         else if (showingVideo) openDrawer();
         else { stopEngine(); super.onBackPressed(); }
     }
-    @Override protected void onResume() { super.onResume(); resumed = true; immersive(); startEngine(); }
-    @Override protected void onPause() { resumed = false; stopEngine(); super.onPause(); }
+    @Override protected void onResume() { super.onResume(); resumed = true; immersive(); pad.attach(); startEngine(); padSync(); }
+    @Override protected void onPause() { resumed = false; pad.detach(); stopEngine(); super.onPause(); }
     @Override protected void onDestroy() { handler.removeCallbacksAndMessages(null); unregisterReceiver(permissionReceiver); updater.release(); super.onDestroy(); }
     @Override public void surfaceCreated(SurfaceHolder holder) { surfaceReady = true; startEngine(); }
     @Override public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) { }
     @Override public void surfaceDestroyed(SurfaceHolder holder) { surfaceReady = false; stopEngine(); }
-    @Override public void onWindowFocusChanged(boolean focus) { super.onWindowFocusChanged(focus); if (focus) immersive(); }
+    @Override public void onWindowFocusChanged(boolean focus) { super.onWindowFocusChanged(focus); if (focus) immersive(); padSync(); }
     private void immersive() {
         getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
                 | View.SYSTEM_UI_FLAG_FULLSCREEN | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION

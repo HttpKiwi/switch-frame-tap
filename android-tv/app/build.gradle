@@ -48,6 +48,7 @@ tasks.register('protocolTest', JavaExec) {
 tasks.register('compileProtocolTest', JavaCompile) {
     source = files('src/main/java/io/github/switchframetap/tv/SftProtocol.java',
                    'src/main/java/io/github/switchframetap/tv/VideoQueue.java',
+                   'src/main/java/io/github/switchframetap/tv/PadMath.java',
                    'src/test/java/io/github/switchframetap/tv/ProtocolTest.java')
     classpath = files()
     destinationDirectory = layout.buildDirectory.dir('protocol-test')
