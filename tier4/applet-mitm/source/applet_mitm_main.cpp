@@ -697,6 +697,9 @@ namespace ams {
             mitm::applet::g_vpad_enabled.store(mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "vinput"), std::memory_order_relaxed);
             mitm::applet::g_early_collect = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "earlyoff") ? 0
                                           : mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "earlyab") ? 2 : 1;
+            mitm::applet::g_mid_collect = mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "midoff") ? 0
+                                        : mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "midon") ? 1
+                                        : mitm::applet::armfile::Contains(g_arm_buf, g_arm_len, "midab") ? 2 : mitm::applet::MidCollectDefault;
         }
 
         /* Numeric option out of the arm file: "wait=180" delays the probe so
@@ -1141,7 +1144,7 @@ namespace ams {
         /* M76: this line used to print jpg=off before jpg was parsed, and
          * called every build a "read-only observer". The flag dump below is
          * the record of what this boot armed. */
-        mitm::applet::LogLine("applet-mitm v0.7.20-beta3: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
+        mitm::applet::LogLine("applet-mitm v0.7.20-perf1: up (grc IPC interceptor %s), built against Atmosphere %d.%d.%d",
                               mitm::applet::g_grc_armed ? "ARMED" : "off",
                               ATMOSPHERE_RELEASE_VERSION_MAJOR, ATMOSPHERE_RELEASE_VERSION_MINOR, ATMOSPHERE_RELEASE_VERSION_MICRO);
         {
@@ -1186,6 +1189,7 @@ namespace ams {
         mitm::applet::g_ui_stream_armed = ArmFileContains("homemenu");   /* v0.7.14: the HOME menu streams too */
         g_screen_off.store(ArmFileContains("screenoff"), std::memory_order_relaxed);
         mitm::applet::g_early_collect = ArmFileContains("earlyoff") ? 0 : ArmFileContains("earlyab") ? 2 : 1;
+        mitm::applet::g_mid_collect   = ArmFileContains("midoff") ? 0 : ArmFileContains("midon") ? 1 : ArmFileContains("midab") ? 2 : mitm::applet::MidCollectDefault;
         mitm::applet::g_nv1080_armed  = ArmFileContains("nv1080");
         mitm::applet::g_nv1080_n      = ArmFileNumber("nv1080", 120);
         mitm::applet::g_cap720_armed  = ArmFileContains("cap720");

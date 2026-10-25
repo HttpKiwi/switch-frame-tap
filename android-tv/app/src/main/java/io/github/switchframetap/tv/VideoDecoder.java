@@ -40,7 +40,7 @@ final class VideoDecoder implements AutoCloseable {
     private long watchStartNs, watchInputs, watchDecoded;
     private int alternatives;   // plainer settings or other decoders left to try; 0: keep this one
     private int width, height;
-    private long lastPts, ptsOriginNs, firstInputNs, lastOutputNs;
+    private long lastPts, ptsOriginNs, firstInputNs, lastOutputNs, lastInputNs;
     private int inputsSinceOutput;
     /** Decoding far fewer frames than arrive: try it plainer, or another decoder. */
     private static final class SlowDecoderException extends IOException {
@@ -71,7 +71,9 @@ final class VideoDecoder implements AutoCloseable {
             while (!stopped) {
                 try {
                     if (codec != null) drain();
-                    if (pending == null) pending = queue.poll(4);
+                    // v0.7.21: a frame is in the decoder - look for its output every millisecond
+                    // (it was every 4: up to 4 ms of the age added after the decode, on average 2)
+                    if (pending == null) pending = queue.poll(inputsSinceOutput > 0 && System.nanoTime() - lastInputNs < 12_000_000L ? 1 : 4);
                     if (pending == null) continue;
                     boolean resized = pending.width != width || pending.height != height;
                     if (pending != configuredPacket && (pending.discontinuity || codec == null || resized)) {
@@ -107,7 +109,7 @@ final class VideoDecoder implements AutoCloseable {
                     lastPts = pts; stamps.put(pts, new Stamp(pending));
                     while (stamps.size() > 128) stamps.remove(stamps.keySet().iterator().next());
                     codec.queueInputBuffer(index, 0, pending.data.length, pts, 0);
-                    stats.inputSubmitted++; inputsSinceOutput++;
+                    stats.inputSubmitted++; inputsSinceOutput++; lastInputNs = System.nanoTime();
                     if (firstInputNs == 0) firstInputNs = System.nanoTime();
                     checkThroughput();
                     long progress = lastOutputNs == 0 ? firstInputNs : lastOutputNs;

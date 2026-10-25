@@ -177,6 +177,12 @@ int main() {
     ExpectRelease("early_collect = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio earlyoff");
     ExpectRelease("early_collect = ab\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio earlyab");
     ExpectRelease("early_collect = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");
+    /* v0.7.21: mid-read collection - the default (no token) is the build's, 0 / 1 / ab say so */
+    ExpectRelease("mid_collect = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio midoff");
+    ExpectRelease("mid_collect = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio midon");
+    ExpectRelease("mid_collect = ab\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio midab");
+    ExpectRelease("early_collect = ab\nmid_collect = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio earlyab midoff");
+    ExpectContains("vic exec dbg usb live midoff", "mid", false);
     /* v0.7.12: screen off while streaming */
     ExpectRelease("screen_off = 1\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio screenoff");
     ExpectRelease("screen_off = 0\n", "vic exec dbg usb live nvqp=20 nvgop=60 wait=20 audio");

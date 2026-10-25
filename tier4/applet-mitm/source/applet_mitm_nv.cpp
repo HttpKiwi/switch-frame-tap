@@ -1904,6 +1904,8 @@ namespace ams::mitm::applet {
     constinit std::atomic<u32> g_queue_fence_n{0};
     constinit bool g_nvab_armed = false;
     constinit std::atomic<u32> g_early_collect{1};
+    /* v0.7.21 perf: 0 = off, 1 = on, 2 = A/B in 600-frame halves (this test build's default) */
+    constinit std::atomic<u32> g_mid_collect{MidCollectDefault};
     /* v0.7.14 ovl2: frames the live stream sent and their read and VIC time,
      * for research that measures its own cost per second (the overlay probe) */
     constinit std::atomic<u32> g_live_frames{0};
@@ -6731,6 +6733,14 @@ namespace ams::mitm::applet {
              * previous encode); called between polls until it returns true */
             EncodeIdleWork idle_work;
             bool early_poll = false;   /* v0.7.12 (PR #12): poll it while waiting for a present too */
+            /* v0.7.21: poll it between the 2 MB pieces of a long read too. Run v0713-test3 (a heavy scene):
+             * the read took 14 ms and the previous frame's encode, done after ~8, waited for the end of
+             * the read, the VIC and the wait for it - a frame's age was 64 ms, 15 of them "->encoded" */
+            bool mid_poll = false;
+            u64 prev_read_ns = 0;      /* the last read without the collections inside it */
+            u32 mid_collects = 0;
+            u64 mid_poll_ns = 0;       /* the polls and collections inside the running read */
+            static constexpr u64 MidReadMinNs = UINT64_C(6000000);
             u64 last_flush_ns = 0;
 
             /* v0.7.1: was 30 ms. Pokemon Sword queues each frame ~20 ms
@@ -6985,6 +6995,7 @@ namespace ams::mitm::applet {
             bool ReadSlot(::ams::svc::Handle dbg, u64 base, u64 *read_ns, u32 *sig) {
                 const u64 t0 = armTicksToNs(armGetSystemTick());
                 last_read = base;
+                mid_poll_ns = 0;
                 /* v0.7.14: never past the capture region (the first frame is
                  * read before Open checks the region's size) */
                 {
@@ -7007,10 +7018,17 @@ namespace ams::mitm::applet {
                 } else {
                     const u32 bytes = ReadBytes();
                     last_read_bytes = bytes;
+                    const bool mid = mid_poll && prev_read_ns >= MidReadMinNs;
                     for (u32 off = 0; off < bytes; off += ReadPiece) {
                         const u32 n = bytes - off < ReadPiece ? bytes - off : ReadPiece;
                         if (!DbgRead(dbg, g_ind_buf + off, base + off, n)) {
                             return false;
+                        }
+                        if (mid && off + n < bytes && idle_work.fn != nullptr) {
+                            const u64 tp = armTicksToNs(armGetSystemTick());
+                            const bool sent_it = idle_work.Poll();
+                            mid_poll_ns += armTicksToNs(armGetSystemTick()) - tp;
+                            if (sent_it) { ++mid_collects; }
                         }
                     }
                     const u64 tf = armTicksToNs(armGetSystemTick());
@@ -7020,7 +7038,10 @@ namespace ams::mitm::applet {
                 u32 h = 0;
                 for (u32 k = 0; k < 8192; k += 8) { h = h * 31u + g_ind_buf[k]; }
                 *sig = h;
-                *read_ns = armTicksToNs(armGetSystemTick()) - t0;
+                const u64 total = armTicksToNs(armGetSystemTick()) - t0;
+                *read_ns = total > mid_poll_ns ? total - mid_poll_ns : total;
+                mid_poll_ns = 0;
+                prev_read_ns = *read_ns;
                 return true;
             }
 
@@ -7984,6 +8005,8 @@ namespace ams::mitm::applet {
              * it waits for NVENC, then sends the frame exactly as before. */
             struct InFlight { bool active; u32 i; u32 pic; u32 fence; u64 t_submit; bool is_idr; u32 pos; u64 present_ns, rn, vic_ns, t0, t1, flush_ns; u32 crop = 0; bool center = false; };
             u64 w_read = 0, w_flush = 0, w_vic = 0, w_enc = 0, w_fence0 = 0;
+            u64 w_u_wait = 0, w_u_audio = 0, w_u_hdr = 0, w_u_post = 0;   /* v0.7.21: where the USB time of a frame goes */
+            u32 w_u_audio_n = 0, w_u_n = 0;
             u32 w_n = 0, w_sent0 = 0, w_fwait0 = 0, w_ready0 = 0, w_waited0 = 0, w_drop0 = 0;
             u64 w_t0 = armTicksToNs(armGetSystemTick());
             InFlight fl = {};
@@ -7998,7 +8021,7 @@ namespace ams::mitm::applet {
                 }
             };
             /* v0.7.12: the console-side age of what was sent, per A/B half */
-            u64 ab_age_sum = 0, ab_age_max = 0;
+            u64 ab_age_sum = 0, ab_age_max = 0, ab_cp_sum = 0, ab_enc_sum = 0, ab_read_sum = 0;
             u32 ab_age_n = 0, early_collects = 0;
             u64 ec_t0 = armTicksToNs(armGetSystemTick());
             /* v0.7.12: where a frame's console age goes, per log window -
@@ -8069,6 +8092,8 @@ namespace ams::mitm::applet {
                     ++sent;
                     pending = false;
                 }
+                const u64 t3w = armTicksToNs(armGetSystemTick());
+                w_u_wait += t3w - t3;
                 /* v0.3: the game audio since the last frame, as its own packet -
                  * nothing else is in flight on the endpoint at this point.
                  * flags bit 3: 16-bit stereo PCM; width = rate, height = channels. */
@@ -8089,6 +8114,7 @@ namespace ams::mitm::applet {
                             why = "USB audio send failed (viewer gone?)"; end = StreamEnd::ViewerGone; return true;
                         }
                         audio_bytes += an;
+                        w_u_audio += armTicksToNs(armGetSystemTick()) - t3w; ++w_u_audio_n;
                     }
                 }
                 const u64 t4 = armTicksToNs(armGetSystemTick());
@@ -8097,9 +8123,10 @@ namespace ams::mitm::applet {
                 const u32 payload = static_cast<u32>(HdrsLen + bytes);
                 const u64 t5 = armTicksToNs(armGetSystemTick());
                 const u64 age = (f.present_ns != 0 && t5 > f.present_ns) ? t5 - f.present_ns : 0;
-                if (age != 0) { ab_age_sum += age; ++ab_age_n; if (age > ab_age_max) { ab_age_max = age; } }
+                if (age != 0) { ab_age_sum += age; ++ab_age_n; ab_read_sum += f.rn; if (age > ab_age_max) { ab_age_max = age; } }
                 if (age != 0 && f.t1 > f.present_ns && f.t_submit >= f.t1 && w0 >= f.t_submit && t5 >= w0) {
                     sp_copied += f.t1 - f.present_ns; sp_submit += f.t_submit - f.t1; sp_enc += w0 - f.t_submit; sp_sent += t5 - w0; ++sp_n;
+                    ab_cp_sum += f.t1 - f.present_ns; ab_enc_sum += w0 - f.t_submit;
                 }
                 SftHdrWire h = {};
                 h.magic = 0x52544653u;        /* "SFTR" */
@@ -8113,7 +8140,9 @@ namespace ams::mitm::applet {
                 std::memcpy(g_usb_hdr, std::addressof(h), sizeof(h));
                 size_t hs = 0;
                 if (!UsbSendBuffer(g_usb_hdr, sizeof(SftHdrWire), std::addressof(hs))) { why = "USB header send failed (viewer gone?)"; end = StreamEnd::ViewerGone; return true; }
+                const u64 t5h = armTicksToNs(armGetSystemTick());
                 if (!UsbPostAsync(g_stream_stage[parity], payload, std::addressof(urb))) { why = "USB post failed"; end = StreamEnd::ViewerGone; return true; }
+                w_u_hdr += t5h - t5; w_u_post += armTicksToNs(armGetSystemTick()) - t5h; ++w_u_n;
                 pending = true;
                 parity ^= 1;
                 last_sent = f.i;
@@ -8229,16 +8258,22 @@ namespace ams::mitm::applet {
                 /* v0.7.12: early collection (PR #12), or A/B: on for the even
                  * 600-frame halves, off for the odd ones */
                 const bool early = pipe && (g_early_collect == 1 || (g_early_collect == 2 && ((i / 600) & 1) == 0));
-                if (pipe && g_early_collect == 2 && i % 600 == 599) {
+                /* v0.7.21: collecting between the pieces of a long read, on top of early collection */
+                const u32 mid_mode = g_mid_collect.load(std::memory_order_relaxed);
+                const bool mid = early && (mid_mode == 1 || (mid_mode == 2 && ((i / 600) & 1) == 0));
+                if (pipe && (g_early_collect == 2 || mid_mode == 2) && i % 600 == 599) {
                     const u64 ab_dt = t0 > ec_t0 ? t0 - ec_t0 : 1;
                     const u64 ab_fps_x10 = static_cast<u64>(ab_age_n) * UINT64_C(10000000000) / ab_dt;
-                    LogLine("   early-collect A/B: %s - console age avg %llu us, max %llu us; %u frames sent, %llu.%llu fps; collected while idle %u",
-                            early ? "ON " : "OFF", static_cast<unsigned long long>(ab_age_n ? ab_age_sum / ab_age_n / 1000 : 0),
-                            static_cast<unsigned long long>(ab_age_max / 1000), ab_age_n,
-                            static_cast<unsigned long long>(ab_fps_x10 / 10), static_cast<unsigned long long>(ab_fps_x10 % 10), early_collects);
-                    ab_age_sum = ab_age_max = 0; ab_age_n = 0; early_collects = 0; ec_t0 = t0;
+                    const u32 abn = ab_age_n ? ab_age_n : 1;
+                    LogLine("   A/B early-collect %s, mid-read collect %s: console age avg %llu us (copied %llu, encoded %llu), max %llu us; read avg %llu us; %u frames sent, %llu.%llu fps; collected while idle %u, inside a read %u",
+                            early ? "ON " : "OFF", mid ? "ON " : "OFF", static_cast<unsigned long long>(ab_age_sum / abn / 1000),
+                            static_cast<unsigned long long>(ab_cp_sum / abn / 1000), static_cast<unsigned long long>(ab_enc_sum / abn / 1000),
+                            static_cast<unsigned long long>(ab_age_max / 1000), static_cast<unsigned long long>(ab_read_sum / abn / 1000), ab_age_n,
+                            static_cast<unsigned long long>(ab_fps_x10 / 10), static_cast<unsigned long long>(ab_fps_x10 % 10), early_collects, s.mid_collects);
+                    ab_age_sum = ab_age_max = ab_cp_sum = ab_enc_sum = ab_read_sum = 0; ab_age_n = 0; early_collects = 0; s.mid_collects = 0; ec_t0 = t0;
                 }
                 s.early_poll = early;
+                s.mid_poll = mid;
                 if (pipe && fl.active) {
                     s.idle_work = { [](void *p) -> bool { return (*static_cast<decltype(hook) *>(p))(); }, std::addressof(hook) };
                 }
@@ -8246,6 +8281,7 @@ namespace ams::mitm::applet {
                 if (got && early) { s.idle_work.Poll(); }   /* NVENC done during the copy: send before the VIC */
                 s.idle_work = {};
                 s.early_poll = false;
+                s.mid_poll = false;
                 if (hook_stop) { break; }
                 if (!got) { why = SlotReadFailure(); if (live) { GameLeft(); } end = StreamEnd::GameGone; break; }
                 const u64 present_ns = armTicksToNs(s.present_tick);
@@ -8383,6 +8419,12 @@ namespace ams::mitm::applet {
                                     static_cast<unsigned long long>(sp_enc / sn / 1000), static_cast<unsigned long long>(sp_sent / sn / 1000), sp_n,
                                     cpu_hz / 1000000, emc_hz / 1000000);
                             sp_copied = sp_submit = sp_enc = sp_sent = 0; sp_n = 0;
+                        }
+                        if (w_u_n != 0) {
+                            LogLine("   nvstream USB per frame avg us: wait for the previous transfer %llu, audio %llu (%u sends), header %llu, post %llu",
+                                    static_cast<unsigned long long>(w_u_wait / w_u_n / 1000), static_cast<unsigned long long>(w_u_audio / w_u_n / 1000), w_u_audio_n,
+                                    static_cast<unsigned long long>(w_u_hdr / w_u_n / 1000), static_cast<unsigned long long>(w_u_post / w_u_n / 1000));
+                            w_u_wait = w_u_audio = w_u_hdr = w_u_post = 0; w_u_audio_n = w_u_n = 0;
                         }
                         LogLine("   nvstream window: %llu.%llu fps sent; per frame avg us: read %llu (flush %llu of it)  VIC %llu  NVENC wait %llu  GPU fence %llu; "
                                 "presents: %u already drawn, %u waited for, %u skipped",

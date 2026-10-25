@@ -116,6 +116,10 @@ namespace ams::mitm::applet {
     /* (this one and g_detach_on_home are read while a session runs, and the
      * manager's ReloadConfig rewrites them from another thread: atomics) */
     extern std::atomic<u32> g_early_collect;
+    /* v0.7.21: also collect the previous frame between the pieces of a long read: 0 off, 1 on, 2 A/B in 600-frame
+     * halves. The default of the config key mid_collect (this test build: the A/B). */
+    constexpr u32 MidCollectDefault = 2;
+    extern std::atomic<u32> g_mid_collect;
     /* v0.7.14 ovl2: the live stream's sent frames and their read/VIC time (ns), running totals */
     extern std::atomic<u32> g_live_frames;
     extern std::atomic<u64> g_live_read_ns, g_live_vic_ns;
